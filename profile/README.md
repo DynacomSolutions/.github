@@ -1,5 +1,10 @@
 ## Dynacom Solutions
 
+Shared Apple build capacity is available to approved private repositories
+through the `apple-builders` GitHub Actions runner group. Repository workflows
+should call `DynacomSolutions/.github/.github/workflows/apple-build.yml@main`
+for Xcode, Swift-on-Darwin, Simulator and other macOS-only validation.
+
 <!--
 
 **Here are some ideas to get you started:**

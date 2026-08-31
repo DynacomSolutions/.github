@@ -1,0 +1,195 @@
+name: Apple build
+
+on:
+  workflow_call:
+    inputs:
+      task:
+        description: Apple task to run
+        required: false
+        default: toolchain
+        type: string
+      working-directory:
+        description: Repository-relative working directory
+        required: false
+        default: .
+        type: string
+      project:
+        description: Repository-relative Xcode project path
+        required: false
+        default: ""
+        type: string
+      workspace:
+        description: Repository-relative Xcode workspace path
+        required: false
+        default: ""
+        type: string
+      scheme:
+        description: Xcode scheme for build or test
+        required: false
+        default: ""
+        type: string
+      configuration:
+        description: Xcode build configuration
+        required: false
+        default: Debug
+        type: string
+      destination:
+        description: Optional xcodebuild destination
+        required: false
+        default: ""
+        type: string
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Apple task to run
+        required: true
+        default: toolchain
+        type: choice
+        options:
+          - toolchain
+          - swift-test
+          - xcode-build
+          - xcode-test
+      working-directory:
+        description: Repository-relative working directory
+        required: false
+        default: .
+        type: string
+      project:
+        description: Repository-relative Xcode project path
+        required: false
+        default: ""
+        type: string
+      workspace:
+        description: Repository-relative Xcode workspace path
+        required: false
+        default: ""
+        type: string
+      scheme:
+        description: Xcode scheme for build or test
+        required: false
+        default: ""
+        type: string
+      configuration:
+        description: Xcode build configuration
+        required: false
+        default: Debug
+        type: string
+      destination:
+        description: Optional xcodebuild destination
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-builder-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  apple:
+    name: ${{ inputs.task }}
+    runs-on:
+      group: apple-builders
+      labels: apple-builder
+    timeout-minutes: 60
+    env:
+      APPLE_TASK: ${{ inputs.task }}
+      APPLE_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      APPLE_PROJECT: ${{ inputs.project }}
+      APPLE_WORKSPACE: ${{ inputs.workspace }}
+      APPLE_SCHEME: ${{ inputs.scheme }}
+      APPLE_CONFIGURATION: ${{ inputs.configuration }}
+      APPLE_DESTINATION: ${{ inputs.destination }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@v4
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Record Apple toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Apple builder"
+            echo
+            echo '```text'
+            sw_vers
+            uname -m
+            xcodebuild -version
+            swift --version
+            echo '```'
+          } | tee "$RUNNER_TEMP/apple-toolchain.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run declared Apple task
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$APPLE_WORKING_DIRECTORY" in
+            /*|*..*)
+              echo "working-directory must be a repository-relative path without '..'" >&2
+              exit 2
+              ;;
+          esac
+
+          workdir="$GITHUB_WORKSPACE/$APPLE_WORKING_DIRECTORY"
+          test -d "$workdir" || {
+            echo "working-directory does not exist: $APPLE_WORKING_DIRECTORY" >&2
+            exit 2
+          }
+          cd "$workdir"
+
+          case "$APPLE_TASK" in
+            toolchain)
+              xcodebuild -version
+              swift --version
+              ;;
+            swift-test)
+              swift test
+              ;;
+            xcode-build|xcode-test)
+              test -n "$APPLE_SCHEME" || {
+                echo "scheme is required for $APPLE_TASK" >&2
+                exit 2
+              }
+              test -z "$APPLE_PROJECT" || test -z "$APPLE_WORKSPACE" || {
+                echo "set project or workspace, not both" >&2
+                exit 2
+              }
+
+              args=(-scheme "$APPLE_SCHEME" -configuration "$APPLE_CONFIGURATION")
+              if test -n "$APPLE_PROJECT"; then
+                case "$APPLE_PROJECT" in -*) exit 2 ;; esac
+                args+=(-project "$APPLE_PROJECT")
+              fi
+              if test -n "$APPLE_WORKSPACE"; then
+                case "$APPLE_WORKSPACE" in -*) exit 2 ;; esac
+                args+=(-workspace "$APPLE_WORKSPACE")
+              fi
+              if test -n "$APPLE_DESTINATION"; then
+                args+=(-destination "$APPLE_DESTINATION")
+              fi
+
+              action=build
+              test "$APPLE_TASK" = xcode-test && action=test
+              xcodebuild "$action" "${args[@]}"
+              ;;
+            *)
+              echo "unsupported task: $APPLE_TASK" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Upload toolchain record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-toolchain-${{ github.run_id }}
+          path: ${{ runner.temp }}/apple-toolchain.txt
+          if-no-files-found: warn
+          retention-days: 14
