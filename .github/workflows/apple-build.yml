@@ -183,10 +183,9 @@ jobs:
           test "$(wc -c < "$RUNNER_TEMP/apple-toolchain-inventory.json")" -le 1048576
           test "$(wc -c < "$RUNNER_TEMP/apple-run-manifest.json")" -le 1048576
           test -s "$RUNNER_TEMP/apple-run-manifest.json"
-          test "$(wc -c < "$RUNNER_TEMP/apple-toolchain-inventory.json")" -le 1048576
-          test "$(wc -c < "$RUNNER_TEMP/apple-run-manifest.json")" -le 1048576
 
       - name: Run declared Apple task
+        id: apple_task
         shell: bash
         run: |
           set -euo pipefail
@@ -194,11 +193,13 @@ jobs:
           test -d "$workdir"
           cd "$workdir"
           platform=macos
-          case "$APPLE_DESTINATION" in
-            *iOS*Simulator*|ios_simulator|ios-simulator|ios-sim) platform=ios-simulator ;;
+          destination_lower="${APPLE_DESTINATION,,}"
+          case "$destination_lower" in
+            *ios*simulator*|ios_simulator|ios-simulator|ios-sim) platform=ios-simulator ;;
             macos|Mac*) platform=macos ;;
             "") echo 'destination is required to mark Apple evidence' >&2; exit 2 ;;
           esac
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
           log="$RUNNER_TEMP/apple-log-$platform.txt"
           case "$APPLE_TASK" in
             toolchain)
@@ -217,23 +218,59 @@ jobs:
               action=build
               test "$APPLE_TASK" = xcode-test && action=test
               xcodebuild "$action" "${args[@]}" 2>&1 | tee "$log"
-              result="$RUNNER_TEMP/apple-$platform.xcresult"
-              if test -d "$result"; then
-                result_bytes="$(du -sk "$result" | awk '{print $1 * 1024}')"
-                if (( result_bytes > 104857600 )); then echo 'xcresult exceeds 100 MiB retention limit' >&2; exit 2; fi
-              fi
               ;;
           esac
-          # Keep retained evidence bounded while preserving the original command status.
-          tail -c 10485760 "$log" > "$RUNNER_TEMP/apple-log-$platform.bounded.txt"
-          mv "$RUNNER_TEMP/apple-log-$platform.bounded.txt" "$log"
+
+      - name: Admit bounded retained evidence
+        id: evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          shopt -s nullglob
+          log_count=0
+          for log in "$RUNNER_TEMP"/apple-log-*.txt; do
+            bounded="${log%.txt}.bounded.txt"
+            if tail -c 10485760 "$log" > "$bounded"; then
+              ((log_count += 1))
+            else
+              rm -f "$bounded"
+            fi
+          done
+          echo "log_admitted=$([[ $log_count -gt 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          admitted=true
+          result_count=0
+          for result in "$RUNNER_TEMP"/apple-*.xcresult; do
+            if [[ -L "$result" || ! -d "$result" || ! -f "$result/Info.plist" ]]; then
+              admitted=false
+              continue
+            fi
+            ((result_count += 1))
+            result_bytes="$(python3 - "$result" <<'PY'
+          import os, sys
+          total = 0
+          for root, directories, files in os.walk(sys.argv[1], followlinks=False):
+              directories[:] = [name for name in directories if not os.path.islink(os.path.join(root, name))]
+              for name in files:
+                  path = os.path.join(root, name)
+                  if not os.path.islink(path):
+                      total += os.path.getsize(path)
+          print(total)
+          PY
+          )"
+            if [[ ! "$result_bytes" =~ ^[0-9]+$ ]] || (( result_bytes > 104857600 )); then
+              admitted=false
+            fi
+          done
+          [[ $result_count -gt 0 ]] || admitted=false
+          echo "xcresult_admitted=$admitted" >> "$GITHUB_OUTPUT"
 
       - name: Upload Apple log
-        if: always() && hashFiles(format('{0}/apple-log-*.txt', runner.temp)) != ''
+        if: always() && steps.evidence.outputs.log_admitted == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: apple-log-${{ contains(inputs.destination, 'iOS Simulator') && 'ios-simulator' || 'macos' }}
-          path: ${{ runner.temp }}/apple-log-*.txt
+          name: apple-log-${{ steps.apple_task.outputs.platform }}
+          path: ${{ runner.temp }}/apple-log-*.bounded.txt
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 6
@@ -251,10 +288,10 @@ jobs:
           compression-level: 6
 
       - name: Upload Xcode result bundle
-        if: always() && hashFiles(format('{0}/apple-*.xcresult/Info.plist', runner.temp)) != ''
+        if: always() && steps.evidence.outputs.xcresult_admitted == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: apple-xcresult-${{ contains(inputs.destination, 'iOS Simulator') && 'ios-simulator' || 'macos' }}
+          name: apple-xcresult-${{ steps.apple_task.outputs.platform }}
           path: ${{ runner.temp }}/apple-*.xcresult
           if-no-files-found: ignore
           retention-days: 7
