@@ -1,0 +1,128 @@
+name: No GitHub-hosted runners
+
+# Org-wide guard, meant to be attached as a required workflow (organization
+# ruleset "workflows" rule) for private repositories. It fails when any
+# runs-on in the target repository selects a GitHub-hosted runner.
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  no-hosted-runners:
+    name: No GitHub-hosted runners
+    if: github.event.repository.private
+    runs-on: k3s-runners
+    steps:
+      - name: Checkout target repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Scan runs-on
+        shell: python3 {0}
+        run: |
+          import glob, re, sys
+
+          # GitHub-hosted labels: ubuntu-*, macos-*, windows-* (incl. -latest, -arm, -xlarge).
+          HOSTED = re.compile(r"(?<![\w.-])(ubuntu|macos|windows)-[\w.-]+", re.I)
+          offenders = []  # (file, line, label)
+
+          def check(path, labels):
+              """labels: list of (line, text) making up one runs-on selection."""
+              if any(t.strip().lower() == "self-hosted" for _, t in labels):
+                  return  # self-hosted label present: not a hosted runner
+              for ln, t in labels:
+                  for m in HOSTED.finditer(t):
+                      offenders.append((path, ln, m.group(0)))
+
+          files = sorted(
+              glob.glob(".github/workflows/*.yml")
+              + glob.glob(".github/workflows/*.yaml")
+              + glob.glob("action.yml") + glob.glob("action.yaml")
+              + glob.glob(".github/actions/**/action.y*ml", recursive=True)
+          )
+
+          try:
+              import yaml
+          except ImportError:
+              yaml = None
+              print("pyyaml not available, falling back to line scanning")
+
+          def leaves(node):
+              """Yield (line, text) for every scalar below node (list items, group/labels values)."""
+              if isinstance(node, yaml.ScalarNode):
+                  yield node.start_mark.line + 1, node.value
+              elif isinstance(node, yaml.SequenceNode):
+                  for n in node.value:
+                      yield from leaves(n)
+              elif isinstance(node, yaml.MappingNode):
+                  for k, v in node.value:  # group: / labels: forms
+                      yield from leaves(v)
+
+          def find_nodes(node, key):
+              """Yield the value node of every `key:` anywhere in the document."""
+              if isinstance(node, yaml.MappingNode):
+                  for k, v in node.value:
+                      if isinstance(k, yaml.ScalarNode) and k.value == key:
+                          yield v
+                      yield from find_nodes(v, key)
+              elif isinstance(node, yaml.SequenceNode):
+                  for n in node.value:
+                      yield from find_nodes(n, key)
+
+          def scan_yaml(path):
+              with open(path) as f:
+                  root = yaml.compose(f)
+              if root is None:
+                  return
+              for value in find_nodes(root, "runs-on"):
+                  labels = list(leaves(value))
+                  # Literal options inside expressions are caught by the label regex.
+                  # matrix.<key> references resolve to every value of that key.
+                  for _, t in list(labels):
+                      for key in re.findall(r"matrix\.([\w-]+)", t):
+                          for matrix in find_nodes(root, "matrix"):
+                              for v in find_nodes(matrix, key):
+                                  labels.extend(leaves(v))
+                              if isinstance(matrix, yaml.MappingNode):
+                                  for k, v in matrix.value:
+                                      if k.value == key:
+                                          labels.extend(leaves(v))
+                  check(path, labels)
+
+          def scan_lines(path):
+              lines = open(path).read().splitlines()
+              for i, text in enumerate(lines):
+                  m = re.match(r"(\s*)(?:-\s+)?runs-on:\s*(.*)", text)
+                  if not m:
+                      continue
+                  indent, labels = len(m.group(1)), [(i + 1, m.group(2))]
+                  for j in range(i + 1, len(lines)):  # block list / mapping continuation
+                      nxt = lines[j]
+                      if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                          break
+                      labels.append((j + 1, nxt))
+                  check(path, labels)
+                  if "matrix." in " ".join(t for _, t in labels):
+                      # No parser to resolve the matrix: check the whole file.
+                      check(path, [(n + 1, t) for n, t in enumerate(lines)])
+
+          for path in files:
+              try:
+                  (scan_yaml if yaml else scan_lines)(path)
+              except Exception as e:  # unparsable file: never pass silently
+                  print(f"::warning file={path}::parse failed ({e}); scanning lines")
+                  scan_lines(path)
+
+          print(f"Scanned {len(files)} file(s)")
+          if offenders:
+              for path, line, label in sorted(set(offenders)):
+                  print(f"::error file={path},line={line}::GitHub-hosted runner '{label}'")
+                  print(f"{path}:{line}: GitHub-hosted runner '{label}'")
+              print("\nUse a self-hosted runner label (for example k3s-runners) instead.")
+              sys.exit(1)
+          print("OK: no GitHub-hosted runners referenced")
