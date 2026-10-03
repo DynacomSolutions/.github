@@ -78,7 +78,7 @@ concurrency:
 
 jobs:
   apple:
-    if: ${{ github.event.repository.private == true && inputs.task != 'ios-log-capture' }}
+    if: ${{ github.event.repository.private == true && inputs.task != 'ios-log-capture' && inputs.task != 'ios-interactive-session' }}
     name: Apple build ${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
     runs-on:
       group: apple-builders
@@ -388,3 +388,50 @@ jobs:
       - name: Capture selected simulator app logs
         shell: bash
         run: node .github/scripts/mobile-ios-log-capture.mjs
+
+  ios_interactive_session:
+    if: ${{ github.repository == 'DynacomSolutions/ergon' && github.event.repository.private == true && inputs.task == 'ios-interactive-session' }}
+    name: iOS interactive session ${{ inputs.lease-id }}
+    runs-on:
+      group: apple-builders
+      labels: apple-builder
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MOBILE_IOS_LEASE_ID: ${{ inputs.lease-id }}
+      MOBILE_IOS_RUNTIME_ID: ${{ inputs.runtime-id }}
+      MOBILE_IOS_BRIDGE_ORIGIN: ${{ vars.MOBILE_IOS_BRIDGE_URL }}
+      MOBILE_IOS_OIDC_AUDIENCE: ${{ vars.MOBILE_IOS_OIDC_AUDIENCE }}
+      APPLE_SOURCE_REPOSITORY: ${{ inputs.source-repository || github.repository }}
+      APPLE_SOURCE_REF: ${{ inputs.source-ref || github.sha }}
+    steps:
+      - name: Validate private interactive session inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == DynacomSolutions/ergon && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          [[ "$MOBILE_IOS_LEASE_ID" =~ ^[a-f0-9]{32}$ ]]
+          [[ "$MOBILE_IOS_RUNTIME_ID" =~ ^[A-Za-z0-9_-]{1,80}$ ]]
+          [[ "$APPLE_SOURCE_REPOSITORY" == "$GITHUB_REPOSITORY" && "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$MOBILE_IOS_BRIDGE_ORIGIN" && -n "$MOBILE_IOS_OIDC_AUDIENCE" ]]
+      - name: Check out immutable caller source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.APPLE_SOURCE_REPOSITORY }}
+          ref: ${{ env.APPLE_SOURCE_REF }}
+          clean: true
+          persist-credentials: false
+      - name: Verify interactive helper and Simulator input prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$APPLE_SOURCE_REF" ]]
+          test -f apps/core/src/orchestration/mobile-ios-synthetic-app.swift
+          test -f .github/scripts/mobile-ios-interactive.mjs
+          command -v xcrun
+          command -v idb
+      - name: Run lease-bound interactive Simulator worker
+        shell: bash
+        run: node .github/scripts/mobile-ios-interactive.mjs
