@@ -85,6 +85,9 @@ jobs:
                   for _, job in jobs.value:
                       for value in direct_value(job, "runs-on"):
                           labels = list(leaves(value))
+                          has_self_hosted_constraint = any(
+                              text.strip().lower() == "self-hosted" for _, text in labels
+                          )
                           # Resolve only this job's matrix. Include entries can
                           # add runner values even when the base dimension is safe.
                           expressions = []
@@ -105,10 +108,15 @@ jobs:
                                           labels.extend(leaves(matrix_value))
                                           found = True
                                       for include in direct_value(matrix, "include"):
-                                          for matrix_value in direct_value(include, key):
-                                              labels.extend(leaves(matrix_value))
-                                              found = True
-                              if not found:
+                                          if isinstance(include, yaml.SequenceNode):
+                                              include_items = include.value
+                                          else:
+                                              include_items = [include]
+                                          for include_item in include_items:
+                                              for matrix_value in direct_value(include_item, key):
+                                                  labels.extend(leaves(matrix_value))
+                                                  found = True
+                              if not found and not has_self_hosted_constraint:
                                   offenders.append((path, labels[0][0], "unresolved matrix expression"))
                           check(path, labels)
 

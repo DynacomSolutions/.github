@@ -82,6 +82,48 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_self_hosted_matrix_include_is_accepted(self):
+        result = self.run_scanner(
+            """jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: [self-hosted, linux]
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_dynamic_matrix_requires_literal_self_hosted_constraint(self):
+        fixtures = (
+            (
+                """runs-on:
+      group: ${{ matrix.runner_group }}
+      labels: [self-hosted, '${{ matrix.runner_label }}']
+""",
+                True,
+            ),
+            (
+                """runs-on:
+      group: ${{ matrix.runner_group }}
+      labels: ${{ matrix.runner_label }}
+""",
+                False,
+            ),
+        )
+        for runs_on, accepted in fixtures:
+            with self.subTest(runs_on=runs_on):
+                result = self.run_scanner(
+                    "jobs:\n  build:\n    "
+                    + runs_on
+                    + "    strategy:\n      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}\n"
+                )
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_mixed_self_hosted_and_hosted_labels_fail(self):
         result = self.run_scanner(
             "jobs:\n  build:\n    runs-on: [self-hosted, windows-latest]\n"
