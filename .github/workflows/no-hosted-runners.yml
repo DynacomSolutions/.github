@@ -14,6 +14,7 @@ permissions:
 jobs:
   no-hosted-runners:
     name: No GitHub-hosted runners
+    if: github.event.repository.private
     runs-on: k3s-runners
     steps:
       - name: Checkout target repository
