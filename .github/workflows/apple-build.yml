@@ -85,9 +85,8 @@ jobs:
           [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
           [[ "$APPLE_INVOCATION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
           case "$APPLE_TASK" in toolchain|swift-test|xcode-build|xcode-test) ;; *) exit 2 ;; esac
-          case "$APPLE_WORKING_DIRECTORY" in /*|*..*) exit 2 ;; esac
-          case "$APPLE_PROJECT$APPLE_WORKSPACE" in -* ) exit 2 ;; esac
-
+          [[ "$APPLE_WORKING_DIRECTORY" != /* ]]
+          [[ "$APPLE_PROJECT" != /* && "$APPLE_WORKSPACE" != /* ]]
       - name: Check out exact Ergon source commit
         uses: actions/checkout@v6
         with:
@@ -95,6 +94,35 @@ jobs:
           ref: ${{ inputs.source-ref }}
           clean: true
           persist-credentials: false
+
+      - name: Validate checkout-relative working paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          paths = {
+              'working_directory': os.environ['APPLE_WORKING_DIRECTORY'],
+              'project': os.environ['APPLE_PROJECT'],
+              'workspace': os.environ['APPLE_WORKSPACE'],
+          }
+          if paths['project'] and paths['workspace']:
+              raise SystemExit('project and workspace are mutually exclusive')
+          for label, value in paths.items():
+              if not value:
+                  continue
+              candidate = pathlib.Path(value)
+              if candidate.is_absolute() or '..' in candidate.parts:
+                  raise SystemExit(f'{label} must be checkout-relative')
+              resolved = (root / candidate).resolve(strict=True)
+              try:
+                  resolved.relative_to(root)
+              except ValueError:
+                  raise SystemExit(f'{label} resolves outside the checkout')
+              if not resolved.is_dir():
+                  raise SystemExit(f'{label} must resolve to a directory')
+          PY
 
       - name: Record checked-out source identity
         id: source
@@ -113,6 +141,7 @@ jobs:
           swift --version > "$RUNNER_TEMP/swift-version.txt"
           xcodebuild -showsdks > "$RUNNER_TEMP/xcode-sdks.txt"
           xcrun simctl list runtimes --json > "$RUNNER_TEMP/simulator-runtimes.json"
+          test "$(wc -c < "$RUNNER_TEMP/simulator-runtimes.json")" -le 1048576
           python3 - <<'PY'
           import json, os, pathlib, platform, re
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
@@ -151,7 +180,11 @@ jobs:
           (root / 'apple-run-manifest.json').write_text(json.dumps(manifest, separators=(',', ':')) + '\n')
           PY
           test -s "$RUNNER_TEMP/apple-toolchain-inventory.json"
+          test "$(wc -c < "$RUNNER_TEMP/apple-toolchain-inventory.json")" -le 1048576
+          test "$(wc -c < "$RUNNER_TEMP/apple-run-manifest.json")" -le 1048576
           test -s "$RUNNER_TEMP/apple-run-manifest.json"
+          test "$(wc -c < "$RUNNER_TEMP/apple-toolchain-inventory.json")" -le 1048576
+          test "$(wc -c < "$RUNNER_TEMP/apple-run-manifest.json")" -le 1048576
 
       - name: Run declared Apple task
         shell: bash
@@ -178,8 +211,8 @@ jobs:
               test -n "$APPLE_SCHEME"
               test -z "$APPLE_PROJECT" || test -z "$APPLE_WORKSPACE"
               args=(-scheme "$APPLE_SCHEME" -configuration "$APPLE_CONFIGURATION" -resultBundlePath "$RUNNER_TEMP/apple-$platform.xcresult")
-              if test -n "$APPLE_PROJECT"; then args+=(-project "$APPLE_PROJECT"); fi
-              if test -n "$APPLE_WORKSPACE"; then args+=(-workspace "$APPLE_WORKSPACE"); fi
+              if test -n "$APPLE_PROJECT"; then args+=(-project "$GITHUB_WORKSPACE/$APPLE_PROJECT"); fi
+              if test -n "$APPLE_WORKSPACE"; then args+=(-workspace "$GITHUB_WORKSPACE/$APPLE_WORKSPACE"); fi
               if test -n "$APPLE_DESTINATION" && [[ "$APPLE_DESTINATION" == *platform=* ]]; then args+=(-destination "$APPLE_DESTINATION"); fi
               action=build
               test "$APPLE_TASK" = xcode-test && action=test
@@ -209,7 +242,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: apple-toolchain-inventory
+          name: apple-toolchain-inventory-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/apple-toolchain-inventory.json
             ${{ runner.temp }}/apple-run-manifest.json

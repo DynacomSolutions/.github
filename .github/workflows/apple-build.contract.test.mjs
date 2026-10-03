@@ -26,5 +26,18 @@ describe('Apple reusable workflow contract', () => {
     assert.match(workflow, /retention-days: 7/);
     assert.match(workflow, /10485760/);
     assert.match(workflow, /104857600/);
+    assert.match(workflow, /relative_to\(root\)/);
+    assert.match(workflow, /resolve\(strict=True\)/);
+    assert.match(workflow, /xcodebuild -version/);
+    assert.match(workflow, /swift --version/);
+    assert.match(workflow, /xcodebuild -showsdks/);
+    assert.match(workflow, /xcrun simctl list runtimes --json/);
+    assert.match(workflow, /schemaVersion': 1/);
+    assert.match(workflow, /runnerGroup/);
+    assert.match(workflow, /simulatorRuntimes/);
+    assert.match(workflow, /apple-toolchain-inventory-\$\{\{ github\.run_id \}\}/);
+    assert.match(workflow, /timeout-minutes: 60/);
+    assert.match(workflow, /labels: apple-builder/);
+    assert.match(workflow, /wc -c < "\$RUNNER_TEMP\/simulator-runtimes\.json"\)" -le 1048576/);
   });
 });
