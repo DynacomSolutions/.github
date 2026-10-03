@@ -124,6 +124,36 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
                 else:
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_group_self_hosted_does_not_count_as_runner_label(self):
+        result = self.run_scanner(
+            """jobs:
+  build:
+    runs-on:
+      group: self-hosted
+      labels: ${{ matrix.runner_label }}
+    strategy:
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+"""
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_nested_matrix_expression_requires_self_hosted_label(self):
+        fixtures = (
+            ("runs-on: ${{ matrix.runner }}\n", False),
+            ("runs-on: [self-hosted, '${{ matrix.runner }}']\n", True),
+        )
+        for runs_on, anchored in fixtures:
+            with self.subTest(anchored=anchored):
+                result = self.run_scanner(
+                    "jobs:\n  build:\n    "
+                    + runs_on
+                    + "    strategy:\n      matrix:\n        runner: ${{ inputs.runner }}\n"
+                )
+                if anchored:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_mixed_self_hosted_and_hosted_labels_fail(self):
         result = self.run_scanner(
             "jobs:\n  build:\n    runs-on: [self-hosted, windows-latest]\n"

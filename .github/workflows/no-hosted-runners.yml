@@ -85,8 +85,13 @@ jobs:
                   for _, job in jobs.value:
                       for value in direct_value(job, "runs-on"):
                           labels = list(leaves(value))
+                          label_nodes = list(direct_value(value, "labels"))
+                          if not label_nodes and not isinstance(value, yaml.MappingNode):
+                              label_nodes = [value]
                           has_self_hosted_constraint = any(
-                              text.strip().lower() == "self-hosted" for _, text in labels
+                              text.strip().lower() == "self-hosted"
+                              for label_node in label_nodes
+                              for _, text in leaves(label_node)
                           )
                           # Resolve only this job's matrix. Include entries can
                           # add runner values even when the base dimension is safe.
@@ -118,6 +123,13 @@ jobs:
                                                   found = True
                               if not found and not has_self_hosted_constraint:
                                   offenders.append((path, labels[0][0], "unresolved matrix expression"))
+                          for line, text in labels:
+                              for expression in re.findall(r"\$\{\{[^}]*\}\}", text):
+                                  if (
+                                      not re.fullmatch(r"\$\{\{\s*matrix\.[\w-]+\s*\}\}", expression)
+                                      and not has_self_hosted_constraint
+                                  ):
+                                      offenders.append((path, line, "unsupported runner expression"))
                           check(path, labels)
 
           for path in files:
