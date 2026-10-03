@@ -387,7 +387,4 @@ jobs:
           persist-credentials: false
       - name: Capture selected simulator app logs
         shell: bash
-        env:
-          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: node .github/scripts/mobile-ios-log-capture.mjs
