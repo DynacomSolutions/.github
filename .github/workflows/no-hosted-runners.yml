@@ -22,8 +22,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install pinned YAML parser
+        run: |
+          python3 -m venv "$RUNNER_TEMP/no-hosted-runner-venv"
+          "$RUNNER_TEMP/no-hosted-runner-venv/bin/python" -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
+
       - name: Scan runs-on
-        shell: python3 {0}
+        shell: ${{ runner.temp }}/no-hosted-runner-venv/bin/python {0}
         run: |
           import glob, re, sys
 
@@ -33,11 +38,11 @@ jobs:
 
           def check(path, labels):
               """labels: list of (line, text) making up one runs-on selection."""
-              if any(t.strip().lower() == "self-hosted" for _, t in labels):
-                  return  # self-hosted label present: not a hosted runner
               for ln, t in labels:
                   for m in HOSTED.finditer(t):
                       offenders.append((path, ln, m.group(0)))
+              if any(t.strip().lower() == "self-hosted" for _, t in labels):
+                  return  # self-hosted labels are valid when no hosted label is selected
 
           files = sorted(
               glob.glob(".github/workflows/*.yml")
@@ -49,8 +54,8 @@ jobs:
           try:
               import yaml
           except ImportError:
-              yaml = None
-              print("pyyaml not available, falling back to line scanning")
+              print("::error::PyYAML is required to inspect workflow YAML")
+              sys.exit(1)
 
           def leaves(node):
               """Yield (line, text) for every scalar below node (list items, group/labels values)."""
@@ -63,60 +68,76 @@ jobs:
                   for k, v in node.value:  # group: / labels: forms
                       yield from leaves(v)
 
-          def find_nodes(node, key):
-              """Yield the value node of every `key:` anywhere in the document."""
+          def direct_value(node, key):
               if isinstance(node, yaml.MappingNode):
-                  for k, v in node.value:
+                  for k, value in node.value:
                       if isinstance(k, yaml.ScalarNode) and k.value == key:
-                          yield v
-                      yield from find_nodes(v, key)
-              elif isinstance(node, yaml.SequenceNode):
-                  for n in node.value:
-                      yield from find_nodes(n, key)
+                          yield value
 
           def scan_yaml(path):
               with open(path) as f:
                   root = yaml.compose(f)
               if root is None:
                   return
-              for value in find_nodes(root, "runs-on"):
-                  labels = list(leaves(value))
-                  # Literal options inside expressions are caught by the label regex.
-                  # matrix.<key> references resolve to every value of that key.
-                  for _, t in list(labels):
-                      for key in re.findall(r"matrix\.([\w-]+)", t):
-                          for matrix in find_nodes(root, "matrix"):
-                              for v in find_nodes(matrix, key):
-                                  labels.extend(leaves(v))
-                              if isinstance(matrix, yaml.MappingNode):
-                                  for k, v in matrix.value:
-                                      if k.value == key:
-                                          labels.extend(leaves(v))
-                  check(path, labels)
-
-          def scan_lines(path):
-              lines = open(path).read().splitlines()
-              for i, text in enumerate(lines):
-                  m = re.match(r"(\s*)(?:-\s+)?runs-on:\s*(.*)", text)
-                  if not m:
+              for jobs in direct_value(root, "jobs"):
+                  if not isinstance(jobs, yaml.MappingNode):
                       continue
-                  indent, labels = len(m.group(1)), [(i + 1, m.group(2))]
-                  for j in range(i + 1, len(lines)):  # block list / mapping continuation
-                      nxt = lines[j]
-                      if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
-                          break
-                      labels.append((j + 1, nxt))
-                  check(path, labels)
-                  if "matrix." in " ".join(t for _, t in labels):
-                      # No parser to resolve the matrix: check the whole file.
-                      check(path, [(n + 1, t) for n, t in enumerate(lines)])
+                  for _, job in jobs.value:
+                      for value in direct_value(job, "runs-on"):
+                          labels = list(leaves(value))
+                          label_nodes = list(direct_value(value, "labels"))
+                          if not label_nodes and not isinstance(value, yaml.MappingNode):
+                              label_nodes = [value]
+                          has_self_hosted_constraint = any(
+                              text.strip().lower() == "self-hosted"
+                              for label_node in label_nodes
+                              for _, text in leaves(label_node)
+                          )
+                          # Resolve only this job's matrix. Include entries can
+                          # add runner values even when the base dimension is safe.
+                          expressions = []
+                          for _, text in labels:
+                              expressions.extend(re.findall(r"\$\{\{[^}]*\}\}", text))
+                          matrix_refs = []
+                          for expression in expressions:
+                              match = re.fullmatch(r"\$\{\{\s*matrix\.([\w-]+)\s*\}\}", expression)
+                              if match:
+                                  matrix_refs.append(match.group(1))
+                              else:
+                                  offenders.append((path, labels[0][0], "unsupported runner expression"))
+                          for key in matrix_refs:
+                              found = False
+                              for strategy in direct_value(job, "strategy"):
+                                  for matrix in direct_value(strategy, "matrix"):
+                                      for matrix_value in direct_value(matrix, key):
+                                          labels.extend(leaves(matrix_value))
+                                          found = True
+                                      for include in direct_value(matrix, "include"):
+                                          if isinstance(include, yaml.SequenceNode):
+                                              include_items = include.value
+                                          else:
+                                              include_items = [include]
+                                          for include_item in include_items:
+                                              for matrix_value in direct_value(include_item, key):
+                                                  labels.extend(leaves(matrix_value))
+                                                  found = True
+                              if not found and not has_self_hosted_constraint:
+                                  offenders.append((path, labels[0][0], "unresolved matrix expression"))
+                          for line, text in labels:
+                              for expression in re.findall(r"\$\{\{[^}]*\}\}", text):
+                                  if (
+                                      not re.fullmatch(r"\$\{\{\s*matrix\.[\w-]+\s*\}\}", expression)
+                                      and not has_self_hosted_constraint
+                                  ):
+                                      offenders.append((path, line, "unsupported runner expression"))
+                          check(path, labels)
 
           for path in files:
               try:
-                  (scan_yaml if yaml else scan_lines)(path)
+                  scan_yaml(path)
               except Exception as e:  # unparsable file: never pass silently
-                  print(f"::warning file={path}::parse failed ({e}); scanning lines")
-                  scan_lines(path)
+                  print(f"::error file={path}::parse failed ({e})")
+                  sys.exit(1)
 
           print(f"Scanned {len(files)} file(s)")
           if offenders:
