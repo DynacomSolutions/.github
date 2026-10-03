@@ -23,6 +23,21 @@ on:
         required: false
         default: toolchain
         type: string
+      capture-id:
+        description: Non-secret Core capture identifier for bounded iOS log capture
+        required: false
+        default: ""
+        type: string
+      lease-id:
+        description: Non-secret Core simulator lease identifier
+        required: false
+        default: ""
+        type: string
+      runtime-id:
+        description: Non-secret Core simulator runtime identifier
+        required: false
+        default: ""
+        type: string
       working-directory:
         description: Repository-relative working directory
         required: false
@@ -63,7 +78,7 @@ concurrency:
 
 jobs:
   apple:
-    if: ${{ github.event.repository.private == true }}
+    if: ${{ github.event.repository.private == true && inputs.task != 'ios-log-capture' }}
     name: Apple build ${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
     runs-on:
       group: apple-builders
@@ -334,3 +349,45 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 0
+
+  ios_log_capture:
+    if: ${{ github.event.repository.private == true && inputs.task == 'ios-log-capture' }}
+    name: iOS log capture ${{ inputs.capture-id }}
+    runs-on:
+      group: apple-builders
+      labels: apple-builder
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MOBILE_IOS_CAPTURE_ID: ${{ inputs.capture-id }}
+      MOBILE_IOS_LEASE_ID: ${{ inputs.lease-id }}
+      MOBILE_IOS_RUNTIME_ID: ${{ inputs.runtime-id }}
+      MOBILE_IOS_BRIDGE_URL: ${{ vars.MOBILE_IOS_BRIDGE_URL }}
+      MOBILE_IOS_OIDC_AUDIENCE: ${{ vars.MOBILE_IOS_OIDC_AUDIENCE }}
+      APPLE_SOURCE_REPOSITORY: ${{ inputs.source-repository || github.repository }}
+      APPLE_SOURCE_REF: ${{ inputs.source-ref || github.sha }}
+    steps:
+      - name: Validate private capture inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == DynacomSolutions/ergon && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          [[ "$MOBILE_IOS_CAPTURE_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          [[ -n "$MOBILE_IOS_LEASE_ID" && -n "$MOBILE_IOS_RUNTIME_ID" ]]
+          [[ "$APPLE_SOURCE_REPOSITORY" == "$GITHUB_REPOSITORY" && "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "$MOBILE_IOS_BRIDGE_URL" && -n "$MOBILE_IOS_OIDC_AUDIENCE" ]]
+      - name: Check out immutable caller source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.APPLE_SOURCE_REPOSITORY }}
+          ref: ${{ env.APPLE_SOURCE_REF }}
+          clean: true
+          persist-credentials: false
+      - name: Capture selected simulator app logs
+        shell: bash
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        run: node .github/scripts/mobile-ios-log-capture.mjs
