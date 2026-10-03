@@ -4,16 +4,19 @@ on:
   workflow_call:
     inputs:
       source-repository:
-        description: Allowlisted repository to check out
-        required: true
+        description: Optional explicit source repository; explicit provenance is Ergon-only
+        required: false
+        default: ""
         type: string
       source-ref:
-        description: Full immutable source commit SHA
-        required: true
+        description: Optional full immutable source commit SHA; defaults to the caller commit
+        required: false
+        default: ""
         type: string
       invocation-id:
-        description: Unique caller-generated UUID, independent of source commit
-        required: true
+        description: Optional UUID for strict Ergon wrapper correlation
+        required: false
+        default: ""
         type: string
       task:
         description: Apple task to run
@@ -46,7 +49,7 @@ on:
         default: Debug
         type: string
       destination:
-        description: Optional xcodebuild destination or platform marker
+        description: macos or an executable platform-qualified xcodebuild destination
         required: false
         default: macos
         type: string
@@ -55,12 +58,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: apple-builder-${{ github.repository }}-${{ inputs.invocation-id }}
+  group: apple-builder-${{ github.repository }}-${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: false
 
 jobs:
   apple:
-    name: Apple build ${{ inputs.invocation-id }}
+    if: ${{ github.event.repository.private == true }}
+    name: Apple build ${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
     runs-on:
       group: apple-builders
       labels: apple-builder
@@ -73,25 +77,35 @@ jobs:
       APPLE_SCHEME: ${{ inputs.scheme }}
       APPLE_CONFIGURATION: ${{ inputs.configuration }}
       APPLE_DESTINATION: ${{ inputs.destination }}
-      APPLE_SOURCE_REPOSITORY: ${{ inputs.source-repository }}
-      APPLE_SOURCE_REF: ${{ inputs.source-ref }}
-      APPLE_INVOCATION_ID: ${{ inputs.invocation-id }}
+      APPLE_SOURCE_REPOSITORY: ${{ inputs.source-repository || github.repository }}
+      APPLE_SOURCE_REPOSITORY_INPUT: ${{ inputs.source-repository }}
+      APPLE_SOURCE_REF: ${{ inputs.source-ref || github.sha }}
+      APPLE_SOURCE_REF_INPUT: ${{ inputs.source-ref }}
+      APPLE_INVOCATION_ID: ${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      APPLE_INVOCATION_ID_INPUT: ${{ inputs.invocation-id }}
     steps:
       - name: Validate immutable source and invocation
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$APPLE_SOURCE_REPOSITORY" == "DynacomSolutions/ergon" ]]
-          [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$APPLE_INVOCATION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          [[ "$APPLE_SOURCE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          if [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" || -n "$APPLE_SOURCE_REF_INPUT" || -n "$APPLE_INVOCATION_ID_INPUT" ]]; then
+            [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" && -n "$APPLE_SOURCE_REF_INPUT" && -n "$APPLE_INVOCATION_ID_INPUT" ]]
+            [[ "$GITHUB_REPOSITORY" == "DynacomSolutions/ergon" ]]
+            [[ "$APPLE_SOURCE_REPOSITORY" == "DynacomSolutions/ergon" ]]
+            [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$APPLE_INVOCATION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          else
+            [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          fi
           case "$APPLE_TASK" in toolchain|swift-test|xcode-build|xcode-test) ;; *) exit 2 ;; esac
           [[ "$APPLE_WORKING_DIRECTORY" != /* ]]
           [[ "$APPLE_PROJECT" != /* && "$APPLE_WORKSPACE" != /* ]]
-      - name: Check out exact Ergon source commit
+      - name: Check out immutable caller source commit
         uses: actions/checkout@v6
         with:
-          repository: DynacomSolutions/ergon
-          ref: ${{ inputs.source-ref }}
+          repository: ${{ env.APPLE_SOURCE_REPOSITORY }}
+          ref: ${{ env.APPLE_SOURCE_REF }}
           clean: true
           persist-credentials: false
 
@@ -192,12 +206,34 @@ jobs:
           workdir="$GITHUB_WORKSPACE/$APPLE_WORKING_DIRECTORY"
           test -d "$workdir"
           cd "$workdir"
+          destination_lower="$(printf '%s' "$APPLE_DESTINATION" | tr '[:upper:]' '[:lower:]')"
           platform=macos
-          destination_lower="${APPLE_DESTINATION,,}"
-          case "$destination_lower" in
-            *ios*simulator*|ios_simulator|ios-simulator|ios-sim) platform=ios-simulator ;;
-            macos|Mac*) platform=macos ;;
-            "") echo 'destination is required to mark Apple evidence' >&2; exit 2 ;;
+          execution_destination=
+          case "$APPLE_TASK" in
+            toolchain|swift-test)
+              [[ "$destination_lower" == macos ]] || { echo "$APPLE_TASK runs on the macOS host and does not accept a cross-target marker" >&2; exit 2; }
+              ;;
+            xcode-build|xcode-test)
+              case "$destination_lower" in
+                macos)
+                  execution_destination='platform=macOS'
+                  ;;
+                platform=macos)
+                  execution_destination="$APPLE_DESTINATION"
+                  ;;
+                platform=macos,arch=*|platform=macos,variant=*)
+                  [[ "$destination_lower" =~ ^platform=macos,(arch|variant)=[^,]+$ ]] || exit 2
+                  execution_destination="$APPLE_DESTINATION"
+                  ;;
+                platform=ios\ simulator,name=*|platform=ios\ simulator,id=*)
+                  [[ "$destination_lower" =~ ^platform=ios[[:space:]]simulator,(name|id)=[^,]+(,os=[^,]+)?$ ]] || exit 2
+                  platform=ios-simulator
+                  execution_destination="$APPLE_DESTINATION"
+                  ;;
+                *) echo 'Xcode tasks require macos or a concrete macOS/iOS Simulator platform destination' >&2; exit 2 ;;
+              esac
+              ;;
+            *) echo 'Unsupported Apple task' >&2; exit 2 ;;
           esac
           echo "platform=$platform" >> "$GITHUB_OUTPUT"
           log="$RUNNER_TEMP/apple-log-$platform.txt"
@@ -214,7 +250,7 @@ jobs:
               args=(-scheme "$APPLE_SCHEME" -configuration "$APPLE_CONFIGURATION" -resultBundlePath "$RUNNER_TEMP/apple-$platform.xcresult")
               if test -n "$APPLE_PROJECT"; then args+=(-project "$GITHUB_WORKSPACE/$APPLE_PROJECT"); fi
               if test -n "$APPLE_WORKSPACE"; then args+=(-workspace "$GITHUB_WORKSPACE/$APPLE_WORKSPACE"); fi
-              if test -n "$APPLE_DESTINATION" && [[ "$APPLE_DESTINATION" == *platform=* ]]; then args+=(-destination "$APPLE_DESTINATION"); fi
+              args+=(-destination "$execution_destination")
               action=build
               test "$APPLE_TASK" = xcode-test && action=test
               xcodebuild "$action" "${args[@]}" 2>&1 | tee "$log"

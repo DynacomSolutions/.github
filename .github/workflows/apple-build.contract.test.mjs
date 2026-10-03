@@ -9,28 +9,40 @@ const workflow = readFileSync(
 );
 
 describe("Apple reusable workflow contract", () => {
-  it("is reusable only and requires an allowlisted immutable source plus invocation UUID", () => {
+  it("is reusable only and keeps legacy callers on their immutable caller commit", () => {
     assert.match(workflow, /^\s*workflow_call:/m);
     assert.doesNotMatch(workflow, /^\s*workflow_dispatch:/m);
     assert.match(
       workflow,
-      /source-repository:[\s\S]*?required: true[\s\S]*?type: string/,
+      /source-repository:[\s\S]*?required: false[\s\S]*?default: ""[\s\S]*?type: string/,
     );
     assert.match(
       workflow,
-      /source-ref:[\s\S]*?required: true[\s\S]*?type: string/,
+      /source-ref:[\s\S]*?required: false[\s\S]*?default: ""[\s\S]*?type: string/,
     );
     assert.match(
       workflow,
-      /invocation-id:[\s\S]*?required: true[\s\S]*?type: string/,
+      /invocation-id:[\s\S]*?required: false[\s\S]*?default: ""[\s\S]*?type: string/,
     );
+    assert.match(workflow, /if: \$\{\{ github\.event\.repository\.private == true \}\}/);
+    assert.match(workflow, /inputs\.source-repository \|\| github\.repository/);
+    assert.match(workflow, /inputs\.source-ref \|\| github\.sha/);
+    assert.match(workflow, /\[\[ "\$APPLE_SOURCE_REPOSITORY" == "\$GITHUB_REPOSITORY" \]\]/);
+    assert.match(workflow, /\[\[ "\$GITHUB_REPOSITORY" == "DynacomSolutions\/ergon" \]\]/);
+    assert.match(workflow, /\[\[ -n "\$APPLE_SOURCE_REPOSITORY_INPUT" && -n "\$APPLE_SOURCE_REF_INPUT" && -n "\$APPLE_INVOCATION_ID_INPUT" \]\]/);
     assert.match(workflow, /DynacomSolutions\/ergon/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
   });
 
   it("checks out the exact commit without retaining credentials and emits bounded correlated evidence", () => {
-    assert.match(workflow, /ref: \$\{\{ inputs\.source-ref \}\}/);
+    assert.match(workflow, /ref: \$\{\{ env\.APPLE_SOURCE_REF \}\}/);
+    assert.match(workflow, /repository: \$\{\{ env\.APPLE_SOURCE_REPOSITORY \}\}/);
     assert.match(workflow, /persist-credentials: false/);
+    assert.doesNotMatch(workflow, /APPLE_DESTINATION,,/);
+    assert.match(workflow, /args\+=\(-destination "\$execution_destination"\)/);
+    assert.match(workflow, /swift-test runs on the macOS host/);
+    assert.match(workflow, /\^platform=macos,\(arch\|variant\)=\[\^,\]\+\$/);
+    assert.match(workflow, /\^platform=ios\[\[:space:\]\]simulator,\(name\|id\)=\[\^,\]\+\(,os=\[\^,\]\+\)\?\$/);
     assert.match(workflow, /git rev-parse HEAD/);
     assert.match(workflow, /actualHeadSha/);
     assert.match(workflow, /apple-toolchain-inventory\.json/);
