@@ -8,8 +8,18 @@ const workflow = readFileSync(
   "utf8",
 );
 
+const jobBlock = (name) => {
+  const jobsStart = workflow.indexOf("\njobs:\n");
+  const start = workflow.indexOf(`  ${name}:\n`, jobsStart);
+  assert.notEqual(start, -1, `workflow is missing the ${name} job`);
+  const nextJob = workflow.slice(start + 2).match(/\n  [A-Za-z0-9_-]+:\n/);
+  const end = nextJob ? start + 2 + nextJob.index : undefined;
+  return workflow.slice(start, end);
+};
+
 describe("Apple reusable workflow contract", () => {
   it("is reusable only and keeps legacy callers on their immutable caller commit", () => {
+    const apple = jobBlock("apple");
     assert.match(workflow, /^\s*workflow_call:/m);
     assert.doesNotMatch(workflow, /^\s*workflow_dispatch:/m);
     assert.match(
@@ -24,10 +34,7 @@ describe("Apple reusable workflow contract", () => {
       workflow,
       /invocation-id:[\s\S]*?required: false[\s\S]*?default: ""[\s\S]*?type: string/,
     );
-    assert.match(
-      workflow,
-      /if: \$\{\{ github\.event\.repository\.private == true \}\}/,
-    );
+    assert.match(apple, /if: \$\{\{ github\.event\.repository\.private == true && inputs\.task != 'ios-log-capture' && inputs\.task != 'ios-interactive-session' \}\}/);
     assert.match(workflow, /inputs\.source-repository \|\| github\.repository/);
     assert.match(workflow, /inputs\.source-ref \|\| github\.sha/);
     assert.match(
@@ -44,6 +51,38 @@ describe("Apple reusable workflow contract", () => {
     );
     assert.match(workflow, /DynacomSolutions\/ergon/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
+  });
+
+  it("isolates the specialised iOS jobs behind private Ergon workflow-dispatch gates", () => {
+    const capture = jobBlock("ios_log_capture");
+    const interactive = jobBlock("ios_interactive_session");
+
+    assert.match(capture, /if: \$\{\{ github\.event\.repository\.private == true && inputs\.task == 'ios-log-capture' \}\}/);
+    assert.match(interactive, /if: \$\{\{ github\.repository == 'DynacomSolutions\/ergon' && github\.event\.repository\.private == true && inputs\.task == 'ios-interactive-session' \}\}/);
+    for (const job of [capture, interactive]) {
+      assert.match(job, /group: apple-builders[\s\S]*labels: apple-builder/);
+      assert.match(job, /timeout-minutes: 10/);
+      assert.match(job, /id-token: write/);
+      assert.match(job, /APPLE_SOURCE_REPOSITORY: \$\{\{ inputs\.source-repository \|\| github\.repository \}\}/);
+      assert.match(job, /APPLE_SOURCE_REF: \$\{\{ inputs\.source-ref \|\| github\.sha \}\}/);
+      assert.match(job, /uses: actions\/checkout@v6[\s\S]*repository: \$\{\{ env\.APPLE_SOURCE_REPOSITORY \}\}[\s\S]*ref: \$\{\{ env\.APPLE_SOURCE_REF \}\}[\s\S]*persist-credentials: false/);
+      assert.match(job, /MOBILE_IOS_OIDC_AUDIENCE: \$\{\{ vars\.MOBILE_IOS_OIDC_AUDIENCE \}\}/);
+      assert.match(job, /MOBILE_IOS_BRIDGE_(URL|ORIGIN): \$\{\{ vars\.MOBILE_IOS_BRIDGE_URL \}\}/);
+      assert.match(job, /\[\[ "\$GITHUB_REPOSITORY" == DynacomSolutions\/ergon && "\$GITHUB_EVENT_NAME" == workflow_dispatch \]\]/);
+      assert.match(job, /\[\[ "\$APPLE_SOURCE_REPOSITORY" == "\$GITHUB_REPOSITORY" && "\$APPLE_SOURCE_REF" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
+      assert.match(job, /- name: Validate private/);
+    }
+    assert.match(capture, /MOBILE_IOS_CAPTURE_ID: \$\{\{ inputs\.capture-id \}\}/);
+    assert.match(capture, /MOBILE_IOS_LEASE_ID: \$\{\{ inputs\.lease-id \}\}/);
+    assert.match(capture, /MOBILE_IOS_RUNTIME_ID: \$\{\{ inputs\.runtime-id \}\}/);
+    assert.match(capture, /\[\[ "\$MOBILE_IOS_CAPTURE_ID" =~ \^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-4\[0-9a-f\]\{3\}-\[89ab\]\[0-9a-f\]\{3\}-\[0-9a-f\]\{12\}\$ \]\]/);
+    assert.match(capture, /\[\[ -n "\$MOBILE_IOS_LEASE_ID" && -n "\$MOBILE_IOS_RUNTIME_ID" \]\]/);
+    assert.match(capture, /\[\[ -n "\$MOBILE_IOS_BRIDGE_URL" && -n "\$MOBILE_IOS_OIDC_AUDIENCE" \]\]/);
+    assert.match(interactive, /MOBILE_IOS_LEASE_ID: \$\{\{ inputs\.lease-id \}\}/);
+    assert.match(interactive, /MOBILE_IOS_RUNTIME_ID: \$\{\{ inputs\.runtime-id \}\}/);
+    assert.match(interactive, /\[\[ "\$MOBILE_IOS_LEASE_ID" =~ \^\[a-f0-9\]\{32\}\$ \]\]/);
+    assert.match(interactive, /\[\[ "\$MOBILE_IOS_RUNTIME_ID" =~ \^\[A-Za-z0-9_-\]\{1,80\}\$ \]\]/);
+    assert.match(interactive, /\[\[ -n "\$MOBILE_IOS_BRIDGE_ORIGIN" && -n "\$MOBILE_IOS_OIDC_AUDIENCE" \]\]/);
   });
 
   it("checks out the exact commit without retaining credentials and emits bounded correlated evidence", () => {
