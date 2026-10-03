@@ -10,10 +10,27 @@ WORKFLOW = Path(__file__).with_name("no-hosted-runners.yml")
 
 def scanner_source():
     source = WORKFLOW.read_text()
-    return textwrap.dedent(source[source.index("          import glob, re, sys") :])
+    start = source.index("          import glob, re, sys")
+    end = source.index("\n          PY", start)
+    return textwrap.dedent(source[start:end])
 
 
 class NoHostedRunnersScannerTest(unittest.TestCase):
+    def test_scanner_uses_static_shell_and_setup_python(self):
+        source = WORKFLOW.read_text()
+        self.assertIn("        shell: bash\n", source)
+        self.assertIn(
+            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            source,
+        )
+        self.assertIn("          python-version: '3.12'\n", source)
+        self.assertIn(
+            "          python -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2\n",
+            source,
+        )
+        self.assertIn("          python - <<'PY'\n", source)
+        self.assertNotIn("shell: ${{ runner.temp }}", source)
+
     def run_scanner(self, workflow):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
