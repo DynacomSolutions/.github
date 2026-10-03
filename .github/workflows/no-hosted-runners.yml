@@ -28,8 +28,9 @@ jobs:
           "$RUNNER_TEMP/no-hosted-runner-venv/bin/python" -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
 
       - name: Scan runs-on
-        shell: ${{ runner.temp }}/no-hosted-runner-venv/bin/python {0}
+        shell: bash
         run: |
+          "$RUNNER_TEMP/no-hosted-runner-venv/bin/python" - <<'PY'
           import glob, re, sys
 
           # GitHub-hosted labels: ubuntu-*, macos-*, windows-* (incl. -latest, -arm, -xlarge).
@@ -147,3 +148,4 @@ jobs:
               print("\nUse a self-hosted runner label (for example k3s-runners) instead.")
               sys.exit(1)
           print("OK: no GitHub-hosted runners referenced")
+          PY
