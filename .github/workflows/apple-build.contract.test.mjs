@@ -65,6 +65,7 @@ describe("Apple reusable workflow contract", () => {
     assert.match(workflow, /actualHeadSha/);
     assert.match(workflow, /apple-toolchain-inventory\.json/);
     assert.match(workflow, /apple-run-manifest\.json/);
+    assert.match(workflow, /workflowRunAttempt/);
     assert.match(workflow, /retention-days: 7/);
     assert.match(workflow, /10485760/);
     assert.match(workflow, /104857600/);
@@ -94,7 +95,15 @@ describe("Apple reusable workflow contract", () => {
     assert.match(workflow, /simulatorRuntimes/);
     assert.match(
       workflow,
-      /apple-toolchain-inventory-\$\{\{ github\.run_id \}\}/,
+      /apple-toolchain-inventory-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/,
+    );
+    assert.match(
+      workflow,
+      /name: apple-log-\$\{\{ steps\.apple_task\.outputs\.platform \}\}-attempt-\$\{\{ github\.run_attempt \}\}/,
+    );
+    assert.match(
+      workflow,
+      /name: apple-xcresult-\$\{\{ steps\.apple_task\.outputs\.platform \}\}-attempt-\$\{\{ github\.run_attempt \}\}/,
     );
     assert.match(workflow, /timeout-minutes: 60/);
     assert.match(workflow, /labels: apple-builder/);

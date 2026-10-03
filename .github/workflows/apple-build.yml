@@ -307,7 +307,7 @@ jobs:
         if: always() && steps.evidence.outputs.log_admitted == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: apple-log-${{ steps.apple_task.outputs.platform }}
+          name: apple-log-${{ steps.apple_task.outputs.platform }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/apple-log-*.bounded.txt
           if-no-files-found: ignore
           retention-days: 7
@@ -317,7 +317,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: apple-toolchain-inventory-${{ github.run_id }}
+          name: apple-toolchain-inventory-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/apple-toolchain-inventory.json
             ${{ runner.temp }}/apple-run-manifest.json
@@ -329,7 +329,7 @@ jobs:
         if: always() && steps.evidence.outputs.xcresult_admitted == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: apple-xcresult-${{ steps.apple_task.outputs.platform }}
+          name: apple-xcresult-${{ steps.apple_task.outputs.platform }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/apple-*.xcresult
           if-no-files-found: ignore
           retention-days: 7
