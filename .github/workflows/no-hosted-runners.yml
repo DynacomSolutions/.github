@@ -80,7 +80,7 @@ jobs:
                   return
               for value in find_nodes(root, "runs-on"):
                   labels = list(leaves(value))
-                  # Literal options inside ${{ }} are caught by the label regex.
+                  # Literal options inside expressions are caught by the label regex.
                   # matrix.<key> references resolve to every value of that key.
                   for _, t in list(labels):
                       for key in re.findall(r"matrix\.([\w-]+)", t):
