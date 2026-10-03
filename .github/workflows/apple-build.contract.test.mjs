@@ -48,7 +48,10 @@ describe("Apple reusable workflow contract", () => {
     );
     assert.match(workflow, /steps\.evidence\.outputs\.log_admitted == 'true'/);
     assert.doesNotMatch(workflow, /hashFiles\(format\('\{0\}\/apple-/);
-    assert.match(workflow, /result_count > 0/);
+    assert.match(
+      workflow,
+      /\[\[ \$result_count -gt 0 \]\] \|\| admitted=false/,
+    );
     assert.match(workflow, /steps\.apple_task\.outputs\.platform/);
     assert.match(workflow, /relative_to\(root\)/);
     assert.match(workflow, /resolve\(strict=True\)/);

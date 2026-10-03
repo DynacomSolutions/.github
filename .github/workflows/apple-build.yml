@@ -250,11 +250,13 @@ jobs:
           import os, sys
           total = 0
           for root, directories, files in os.walk(sys.argv[1], followlinks=False):
-              directories[:] = [name for name in directories if not os.path.islink(os.path.join(root, name))]
+              for name in directories + files:
+                  if os.path.islink(os.path.join(root, name)):
+                      print("symlink")
+                      sys.exit(0)
               for name in files:
                   path = os.path.join(root, name)
-                  if not os.path.islink(path):
-                      total += os.path.getsize(path)
+                  total += os.path.getsize(path)
           print(total)
           PY
           )"
