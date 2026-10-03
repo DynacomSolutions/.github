@@ -3,6 +3,21 @@ name: Apple build
 on:
   workflow_call:
     inputs:
+      source-repository:
+        description: Optional explicit source repository; explicit provenance is Ergon-only
+        required: false
+        default: ""
+        type: string
+      source-ref:
+        description: Optional full immutable source commit SHA; defaults to the caller commit
+        required: false
+        default: ""
+        type: string
+      invocation-id:
+        description: Optional UUID for strict Ergon wrapper correlation
+        required: false
+        default: ""
+        type: string
       task:
         description: Apple task to run
         required: false
@@ -34,63 +49,22 @@ on:
         default: Debug
         type: string
       destination:
-        description: Optional xcodebuild destination
+        description: macos or an executable platform-qualified xcodebuild destination
         required: false
-        default: ""
-        type: string
-  workflow_dispatch:
-    inputs:
-      task:
-        description: Apple task to run
-        required: true
-        default: toolchain
-        type: choice
-        options:
-          - toolchain
-          - swift-test
-          - xcode-build
-          - xcode-test
-      working-directory:
-        description: Repository-relative working directory
-        required: false
-        default: .
-        type: string
-      project:
-        description: Repository-relative Xcode project path
-        required: false
-        default: ""
-        type: string
-      workspace:
-        description: Repository-relative Xcode workspace path
-        required: false
-        default: ""
-        type: string
-      scheme:
-        description: Xcode scheme for build or test
-        required: false
-        default: ""
-        type: string
-      configuration:
-        description: Xcode build configuration
-        required: false
-        default: Debug
-        type: string
-      destination:
-        description: Optional xcodebuild destination
-        required: false
-        default: ""
+        default: macos
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: apple-builder-${{ github.repository }}
+  group: apple-builder-${{ github.repository }}-${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
   cancel-in-progress: false
 
 jobs:
   apple:
-    name: ${{ inputs.task }}
+    if: ${{ github.event.repository.private == true }}
+    name: Apple build ${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
     runs-on:
       group: apple-builders
       labels: apple-builder
@@ -103,93 +77,260 @@ jobs:
       APPLE_SCHEME: ${{ inputs.scheme }}
       APPLE_CONFIGURATION: ${{ inputs.configuration }}
       APPLE_DESTINATION: ${{ inputs.destination }}
+      APPLE_SOURCE_REPOSITORY: ${{ inputs.source-repository || github.repository }}
+      APPLE_SOURCE_REPOSITORY_INPUT: ${{ inputs.source-repository }}
+      APPLE_SOURCE_REF: ${{ inputs.source-ref || github.sha }}
+      APPLE_SOURCE_REF_INPUT: ${{ inputs.source-ref }}
+      APPLE_INVOCATION_ID: ${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
+      APPLE_INVOCATION_ID_INPUT: ${{ inputs.invocation-id }}
     steps:
-      - name: Check out caller repository
+      - name: Validate immutable source and invocation
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APPLE_SOURCE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          if [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" || -n "$APPLE_SOURCE_REF_INPUT" || -n "$APPLE_INVOCATION_ID_INPUT" ]]; then
+            [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" && -n "$APPLE_SOURCE_REF_INPUT" && -n "$APPLE_INVOCATION_ID_INPUT" ]]
+            [[ "$GITHUB_REPOSITORY" == "DynacomSolutions/ergon" ]]
+            [[ "$APPLE_SOURCE_REPOSITORY" == "DynacomSolutions/ergon" ]]
+            [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$APPLE_INVOCATION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          else
+            [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          fi
+          case "$APPLE_TASK" in toolchain|swift-test|xcode-build|xcode-test) ;; *) exit 2 ;; esac
+          [[ "$APPLE_WORKING_DIRECTORY" != /* ]]
+          [[ "$APPLE_PROJECT" != /* && "$APPLE_WORKSPACE" != /* ]]
+      - name: Check out immutable caller source commit
         uses: actions/checkout@v6
         with:
+          repository: ${{ env.APPLE_SOURCE_REPOSITORY }}
+          ref: ${{ env.APPLE_SOURCE_REF }}
           clean: true
           persist-credentials: false
 
-      - name: Record Apple toolchain
+      - name: Validate checkout-relative working paths
         shell: bash
         run: |
           set -euo pipefail
-          {
-            echo "## Apple builder"
-            echo
-            echo '```text'
-            sw_vers
-            uname -m
-            xcodebuild -version
-            swift --version
-            echo '```'
-          } | tee "$RUNNER_TEMP/apple-toolchain.txt" >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import os, pathlib
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          paths = {
+              'working_directory': os.environ['APPLE_WORKING_DIRECTORY'],
+              'project': os.environ['APPLE_PROJECT'],
+              'workspace': os.environ['APPLE_WORKSPACE'],
+          }
+          if paths['project'] and paths['workspace']:
+              raise SystemExit('project and workspace are mutually exclusive')
+          for label, value in paths.items():
+              if not value:
+                  continue
+              candidate = pathlib.Path(value)
+              if candidate.is_absolute() or '..' in candidate.parts:
+                  raise SystemExit(f'{label} must be checkout-relative')
+              resolved = (root / candidate).resolve(strict=True)
+              try:
+                  resolved.relative_to(root)
+              except ValueError:
+                  raise SystemExit(f'{label} resolves outside the checkout')
+              if not resolved.is_dir():
+                  raise SystemExit(f'{label} must resolve to a directory')
+          PY
+
+      - name: Record checked-out source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          [[ "$actual" == "$APPLE_SOURCE_REF" ]]
+          printf 'actual_head_sha=%s\n' "$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Capture bounded Apple toolchain inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version > "$RUNNER_TEMP/xcode-version.txt"
+          swift --version > "$RUNNER_TEMP/swift-version.txt"
+          xcodebuild -showsdks > "$RUNNER_TEMP/xcode-sdks.txt"
+          xcrun simctl list runtimes --json > "$RUNNER_TEMP/simulator-runtimes.json"
+          test "$(wc -c < "$RUNNER_TEMP/simulator-runtimes.json")" -le 1048576
+          python3 - <<'PY'
+          import json, os, pathlib, platform, re
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          xcode = (root / 'xcode-version.txt').read_text().splitlines()
+          swift = (root / 'swift-version.txt').read_text().splitlines()
+          sdk_text = (root / 'xcode-sdks.txt').read_text().splitlines()
+          runtime_data = json.loads((root / 'simulator-runtimes.json').read_text())
+          version = next((line.removeprefix('Xcode ') for line in xcode if line.startswith('Xcode ')), '')
+          build = next((line.removeprefix('Build version ') for line in xcode if line.startswith('Build version ')), '')
+          sdks = []
+          for line in sdk_text:
+              match = re.match(r'^\s*(iOS|iOS Simulator|macOS|tvOS|tvOS Simulator|watchOS|watchOS Simulator|visionOS|visionOS Simulator)\s+([0-9.]+)(?:\s+-sdk\s+\S+)?\s*$', line)
+              if match:
+                  sdks.append({'platform': match.group(1), 'version': match.group(2), 'available': True})
+          runtimes = []
+          for item in runtime_data.get('runtimes', []):
+              runtimes.append({'identifier': item.get('identifier', ''), 'version': item.get('version', ''), 'isAvailable': bool(item.get('isAvailable')), 'devices': item.get('devices', [])})
+          inventory = {
+              'schemaVersion': 1,
+              'executor': {'runnerGroup': 'apple-builders', 'runnerLabel': 'apple-builder', 'runnerOs': platform.system(), 'runnerArch': platform.machine()},
+              'xcode': {'version': version, 'build': build},
+              'swift': {'version': next((line for line in swift if line.startswith('Apple Swift version ')), swift[0] if swift else '')},
+              'sdks': sdks,
+              'simulatorRuntimes': runtimes,
+          }
+          (root / 'apple-toolchain-inventory.json').write_text(json.dumps(inventory, separators=(',', ':')) + '\n')
+          manifest = {
+              'schemaVersion': 1,
+              'sourceRepository': os.environ['APPLE_SOURCE_REPOSITORY'],
+              'requestedSourceSha': os.environ['APPLE_SOURCE_REF'],
+              'actualHeadSha': os.popen('git rev-parse HEAD').read().strip(),
+              'invocationId': os.environ['APPLE_INVOCATION_ID'],
+              'workflowRunId': os.environ['GITHUB_RUN_ID'],
+              'workflowRunAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+          }
+          (root / 'apple-run-manifest.json').write_text(json.dumps(manifest, separators=(',', ':')) + '\n')
+          PY
+          test -s "$RUNNER_TEMP/apple-toolchain-inventory.json"
+          test "$(wc -c < "$RUNNER_TEMP/apple-toolchain-inventory.json")" -le 1048576
+          test "$(wc -c < "$RUNNER_TEMP/apple-run-manifest.json")" -le 1048576
+          test -s "$RUNNER_TEMP/apple-run-manifest.json"
 
       - name: Run declared Apple task
+        id: apple_task
         shell: bash
         run: |
           set -euo pipefail
-
-          case "$APPLE_WORKING_DIRECTORY" in
-            /*|*..*)
-              echo "working-directory must be a repository-relative path without '..'" >&2
-              exit 2
-              ;;
-          esac
-
           workdir="$GITHUB_WORKSPACE/$APPLE_WORKING_DIRECTORY"
-          test -d "$workdir" || {
-            echo "working-directory does not exist: $APPLE_WORKING_DIRECTORY" >&2
-            exit 2
-          }
+          test -d "$workdir"
           cd "$workdir"
-
+          destination_lower="$(printf '%s' "$APPLE_DESTINATION" | tr '[:upper:]' '[:lower:]')"
+          platform=macos
+          execution_destination=
           case "$APPLE_TASK" in
-            toolchain)
-              xcodebuild -version
-              swift --version
-              ;;
-            swift-test)
-              swift test
+            toolchain|swift-test)
+              [[ "$destination_lower" == macos ]] || { echo "$APPLE_TASK runs on the macOS host and does not accept a cross-target marker" >&2; exit 2; }
               ;;
             xcode-build|xcode-test)
-              test -n "$APPLE_SCHEME" || {
-                echo "scheme is required for $APPLE_TASK" >&2
-                exit 2
-              }
-              test -z "$APPLE_PROJECT" || test -z "$APPLE_WORKSPACE" || {
-                echo "set project or workspace, not both" >&2
-                exit 2
-              }
-
-              args=(-scheme "$APPLE_SCHEME" -configuration "$APPLE_CONFIGURATION")
-              if test -n "$APPLE_PROJECT"; then
-                case "$APPLE_PROJECT" in -*) exit 2 ;; esac
-                args+=(-project "$APPLE_PROJECT")
-              fi
-              if test -n "$APPLE_WORKSPACE"; then
-                case "$APPLE_WORKSPACE" in -*) exit 2 ;; esac
-                args+=(-workspace "$APPLE_WORKSPACE")
-              fi
-              if test -n "$APPLE_DESTINATION"; then
-                args+=(-destination "$APPLE_DESTINATION")
-              fi
-
+              case "$destination_lower" in
+                macos)
+                  execution_destination='platform=macOS'
+                  ;;
+                platform=macos)
+                  execution_destination="$APPLE_DESTINATION"
+                  ;;
+                platform=macos,arch=*|platform=macos,variant=*)
+                  [[ "$destination_lower" =~ ^platform=macos,(arch|variant)=[^,]+$ ]] || exit 2
+                  execution_destination="$APPLE_DESTINATION"
+                  ;;
+                platform=ios\ simulator,name=*|platform=ios\ simulator,id=*)
+                  [[ "$destination_lower" =~ ^platform=ios[[:space:]]simulator,(name|id)=[^,]+(,os=[^,]+)?$ ]] || exit 2
+                  platform=ios-simulator
+                  execution_destination="$APPLE_DESTINATION"
+                  ;;
+                *) echo 'Xcode tasks require macos or a concrete macOS/iOS Simulator platform destination' >&2; exit 2 ;;
+              esac
+              ;;
+            *) echo 'Unsupported Apple task' >&2; exit 2 ;;
+          esac
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
+          log="$RUNNER_TEMP/apple-log-$platform.txt"
+          case "$APPLE_TASK" in
+            toolchain)
+              { sw_vers; uname -m; xcodebuild -version; swift --version; xcodebuild -showsdks; xcrun simctl list runtimes --json; } > "$log" 2>&1
+              ;;
+            swift-test)
+              swift test 2>&1 | tee "$log"
+              ;;
+            xcode-build|xcode-test)
+              test -n "$APPLE_SCHEME"
+              test -z "$APPLE_PROJECT" || test -z "$APPLE_WORKSPACE"
+              args=(-scheme "$APPLE_SCHEME" -configuration "$APPLE_CONFIGURATION" -resultBundlePath "$RUNNER_TEMP/apple-$platform.xcresult")
+              if test -n "$APPLE_PROJECT"; then args+=(-project "$GITHUB_WORKSPACE/$APPLE_PROJECT"); fi
+              if test -n "$APPLE_WORKSPACE"; then args+=(-workspace "$GITHUB_WORKSPACE/$APPLE_WORKSPACE"); fi
+              args+=(-destination "$execution_destination")
               action=build
               test "$APPLE_TASK" = xcode-test && action=test
-              xcodebuild "$action" "${args[@]}"
-              ;;
-            *)
-              echo "unsupported task: $APPLE_TASK" >&2
-              exit 2
+              xcodebuild "$action" "${args[@]}" 2>&1 | tee "$log"
               ;;
           esac
 
-      - name: Upload toolchain record
+      - name: Admit bounded retained evidence
+        id: evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          shopt -s nullglob
+          log_count=0
+          for log in "$RUNNER_TEMP"/apple-log-*.txt; do
+            bounded="${log%.txt}.bounded.txt"
+            if tail -c 10485760 "$log" > "$bounded"; then
+              ((log_count += 1))
+            else
+              rm -f "$bounded"
+            fi
+          done
+          echo "log_admitted=$([[ $log_count -gt 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          admitted=true
+          result_count=0
+          for result in "$RUNNER_TEMP"/apple-*.xcresult; do
+            if [[ -L "$result" || ! -d "$result" || ! -f "$result/Info.plist" ]]; then
+              admitted=false
+              continue
+            fi
+            ((result_count += 1))
+            result_bytes="$(python3 - "$result" <<'PY'
+          import os, sys
+          total = 0
+          for root, directories, files in os.walk(sys.argv[1], followlinks=False):
+              for name in directories + files:
+                  if os.path.islink(os.path.join(root, name)):
+                      print("symlink")
+                      sys.exit(0)
+              for name in files:
+                  path = os.path.join(root, name)
+                  total += os.path.getsize(path)
+          print(total)
+          PY
+          )"
+            if [[ ! "$result_bytes" =~ ^[0-9]+$ ]] || (( result_bytes > 104857600 )); then
+              admitted=false
+            fi
+          done
+          [[ $result_count -gt 0 ]] || admitted=false
+          echo "xcresult_admitted=$admitted" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Apple log
+        if: always() && steps.evidence.outputs.log_admitted == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: apple-log-${{ steps.apple_task.outputs.platform }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/apple-log-*.bounded.txt
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 6
+
+      - name: Upload toolchain inventory and run manifest
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: apple-toolchain-${{ github.run_id }}
-          path: ${{ runner.temp }}/apple-toolchain.txt
+          name: apple-toolchain-inventory-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/apple-toolchain-inventory.json
+            ${{ runner.temp }}/apple-run-manifest.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
+          compression-level: 6
+
+      - name: Upload Xcode result bundle
+        if: always() && steps.evidence.outputs.xcresult_admitted == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: apple-xcresult-${{ steps.apple_task.outputs.platform }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/apple-*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0
