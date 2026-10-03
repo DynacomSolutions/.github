@@ -22,15 +22,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
       - name: Install pinned YAML parser
         run: |
-          python3 -m venv "$RUNNER_TEMP/no-hosted-runner-venv"
-          "$RUNNER_TEMP/no-hosted-runner-venv/bin/python" -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
+          python -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2
 
       - name: Scan runs-on
         shell: bash
         run: |
-          "$RUNNER_TEMP/no-hosted-runner-venv/bin/python" - <<'PY'
+          python - <<'PY'
           import glob, re, sys
 
           # GitHub-hosted labels: ubuntu-*, macos-*, windows-* (incl. -latest, -arm, -xlarge).

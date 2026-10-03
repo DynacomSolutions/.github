@@ -16,13 +16,19 @@ def scanner_source():
 
 
 class NoHostedRunnersScannerTest(unittest.TestCase):
-    def test_scanner_uses_static_shell_and_invokes_venv_python(self):
+    def test_scanner_uses_static_shell_and_setup_python(self):
         source = WORKFLOW.read_text()
         self.assertIn("        shell: bash\n", source)
         self.assertIn(
-            '          "$RUNNER_TEMP/no-hosted-runner-venv/bin/python" - <<\'PY\'\n',
+            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
             source,
         )
+        self.assertIn("          python-version: '3.12'\n", source)
+        self.assertIn(
+            "          python -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2\n",
+            source,
+        )
+        self.assertIn("          python - <<'PY'\n", source)
         self.assertNotIn("shell: ${{ runner.temp }}", source)
 
     def run_scanner(self, workflow):
