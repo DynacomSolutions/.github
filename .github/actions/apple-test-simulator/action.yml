@@ -1,0 +1,14 @@
+name: Create isolated Apple test simulator
+description: Create one simulator from an already-installed runtime and delete only that device after the job
+inputs:
+  destination:
+    description: Requested iOS or tvOS Simulator destination
+    required: true
+outputs:
+  udid:
+    description: UDID of the simulator created by this action
+runs:
+  using: node20
+  main: main.js
+  post: cleanup.js
+  post-if: always()
