@@ -231,6 +231,11 @@ describe("Apple reusable workflow contract", () => {
     assert.match(workflow, /relative_to\(root\)/);
     assert.match(workflow, /resolve\(strict=True\)/);
     assert.match(workflow, /xcodebuild -version/);
+    assert.match(workflow, /name: Capture installed Xcode installations/);
+    assert.match(workflow, /pathlib\.Path\('\/Applications'\)\.glob\('Xcode\*\.app'\)/);
+    assert.match(workflow, /DEVELOPER_DIR/);
+    assert.match(workflow, /installedXcodes/);
+    assert.match(workflow, /developerDirectory/);
     assert.match(workflow, /swift --version/);
     assert.match(workflow, /xcodebuild -showsdks/);
     assert.match(workflow, /xcrun simctl list runtimes --json/);
