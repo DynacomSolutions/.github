@@ -15,7 +15,7 @@ jobs:
   no-hosted-runners:
     name: No GitHub-hosted runners
     if: github.event.repository.private
-    runs-on: k3s-runners
+    runs-on: ${{ github.repository == 'DynacomSolutions/ergon' && 'k3s-ergon' || 'k3s-runners' }}
     timeout-minutes: 10
     steps:
       - name: Checkout target repository
