@@ -177,6 +177,28 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_self_hosted_windows_builders_group_is_accepted(self):
+        result = self.run_scanner(
+            """jobs:
+  build:
+    runs-on:
+      group: windows-builders
+      labels: dynacom-dev-windows
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_windows_builders_group_does_not_excuse_hosted_labels(self):
+        result = self.run_scanner(
+            """jobs:
+  build:
+    runs-on:
+      group: windows-builders
+      labels: windows-latest
+"""
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_malformed_yaml_fails_closed(self):
         result = self.run_scanner("jobs:\n  build:\n    runs-on: [self-hosted\n")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
