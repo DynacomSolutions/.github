@@ -30,6 +30,10 @@ const validateSource = ({
   sourceRefInput = sourceRef,
   invocationId = "",
   hasDeployKey = "true",
+  workingDirectory = "clients/ios",
+  project = "",
+  workspace = "clients/ios/Playarr.xcworkspace",
+  scheme = "StreamarrApp",
 } = {}) =>
   spawnSync("bash", ["-euo", "pipefail", "-c", validationScript], {
     env: {
@@ -44,9 +48,10 @@ const validateSource = ({
       APPLE_INVOCATION_ID: invocationId || "run-1-1",
       APPLE_INVOCATION_ID_INPUT: invocationId,
       HAS_PLAYARR_READONLY_DEPLOY_KEY: hasDeployKey,
-      APPLE_WORKING_DIRECTORY: ".",
-      APPLE_PROJECT: "clients/ios/Playarr.xcodeproj",
-      APPLE_WORKSPACE: "",
+      APPLE_WORKING_DIRECTORY: workingDirectory,
+      APPLE_PROJECT: project,
+      APPLE_WORKSPACE: workspace,
+      APPLE_SCHEME: scheme,
     },
     encoding: "utf8",
   });
@@ -110,11 +115,26 @@ describe("Apple reusable workflow contract", () => {
 
   it("admits only the private Playarr test dispatcher for explicit Playarr source", () => {
     assert.equal(validateSource().status, 0);
+    assert.equal(
+      validateSource({
+        workingDirectory: "clients/apple-tv",
+        project: "clients/apple-tv/PlayarrTV.xcodeproj",
+        workspace: "",
+        scheme: "PlayarrTV",
+      }).status,
+      0,
+    );
     assert.notEqual(validateSource({ hasDeployKey: "false" }).status, 0);
     assert.notEqual(validateSource({ caller: "DynacomSolutions/other" }).status, 0);
     assert.notEqual(validateSource({ task: "xcode-build" }).status, 0);
     assert.notEqual(validateSource({ privateRepository: "false" }).status, 0);
     assert.notEqual(validateSource({ sourceRef: "main" }).status, 0);
+    assert.notEqual(validateSource({ scheme: "PlayarrApp" }).status, 0);
+    assert.notEqual(validateSource({ project: "clients/ios/Playarr.xcodeproj" }).status, 0);
+    assert.notEqual(
+      validateSource({ workingDirectory: "clients/other" }).status,
+      0,
+    );
     assert.notEqual(validateSource({ sourceRepository: "DynacomSolutions/playarr-apple-builds" }).status, 0);
     assert.notEqual(
       validateSource({
@@ -235,5 +255,19 @@ describe("Apple reusable workflow contract", () => {
       workflow,
       /wc -c < "\$RUNNER_TEMP\/simulator-runtimes\.json"\)" -le 1048576/,
     );
+  });
+
+  it("prepares the private Playarr iOS CocoaPods workspace before validating paths", () => {
+    const checkout = workflow.indexOf("- name: Check out immutable caller source commit");
+    const prepare = workflow.indexOf("- name: Prepare Playarr iOS project and CocoaPods workspace");
+    const pathValidation = workflow.indexOf("- name: Validate checkout-relative working paths");
+    assert.ok(checkout >= 0 && checkout < prepare && prepare < pathValidation);
+    const prepareStep = workflow.slice(prepare, pathValidation);
+    assert.match(prepareStep, /github\.repository == 'DynacomSolutions\/playarr-apple-builds'/);
+    assert.match(prepareStep, /inputs\.task == 'xcode-test'/);
+    assert.match(prepareStep, /inputs\.source-repository == 'ThomasMcFarlane\/playarr'/);
+    assert.match(prepareStep, /inputs\.working-directory == 'clients\/ios'/);
+    assert.match(prepareStep, /inputs\.workspace == 'clients\/ios\/Playarr\.xcworkspace'/);
+    assert.match(prepareStep, /run: bash clients\/ios\/scripts\/prepare\.sh/);
   });
 });
