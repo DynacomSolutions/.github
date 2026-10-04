@@ -113,7 +113,7 @@ jobs:
           else
             [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
           fi
-          case "$APPLE_TASK" in toolchain|swift-test|xcode-build|xcode-test) ;; *) exit 2 ;; esac
+          case "$APPLE_TASK" in toolchain|swift-test|xcode-build|xcode-test|xcode-archive) ;; *) exit 2 ;; esac
           [[ "$APPLE_WORKING_DIRECTORY" != /* ]]
           [[ "$APPLE_PROJECT" != /* && "$APPLE_WORKSPACE" != /* ]]
       - name: Check out immutable caller source commit
@@ -228,8 +228,13 @@ jobs:
             toolchain|swift-test)
               [[ "$destination_lower" == macos ]] || { echo "$APPLE_TASK runs on the macOS host and does not accept a cross-target marker" >&2; exit 2; }
               ;;
-            xcode-build|xcode-test)
+            xcode-build|xcode-test|xcode-archive)
               case "$destination_lower" in
+                generic/platform=ios\ simulator)
+                  [[ "$APPLE_TASK" == xcode-archive ]] || exit 2
+                  platform=ios-simulator
+                  execution_destination='generic/platform=iOS Simulator'
+                  ;;
                 macos)
                   execution_destination='platform=macOS'
                   ;;
@@ -247,6 +252,10 @@ jobs:
                   ;;
                 *) echo 'Xcode tasks require macos or a concrete macOS/iOS Simulator platform destination' >&2; exit 2 ;;
               esac
+              if [[ "$APPLE_TASK" == xcode-archive && "$execution_destination" != 'generic/platform=iOS Simulator' ]]; then
+                echo 'Archive task requires generic/platform=iOS Simulator' >&2
+                exit 2
+              fi
               ;;
             *) echo 'Unsupported Apple task' >&2; exit 2 ;;
           esac
@@ -259,15 +268,22 @@ jobs:
             swift-test)
               swift test 2>&1 | tee "$log"
               ;;
-            xcode-build|xcode-test)
+            xcode-build|xcode-test|xcode-archive)
               test -n "$APPLE_SCHEME"
               test -z "$APPLE_PROJECT" || test -z "$APPLE_WORKSPACE"
-              args=(-scheme "$APPLE_SCHEME" -configuration "$APPLE_CONFIGURATION" -resultBundlePath "$RUNNER_TEMP/apple-$platform.xcresult")
+              args=(-scheme "$APPLE_SCHEME" -configuration "$APPLE_CONFIGURATION")
+              if [[ "$APPLE_TASK" == xcode-archive ]]; then
+                [[ "$platform" == ios-simulator ]] || { echo 'Archive task requires iOS Simulator' >&2; exit 2; }
+                args+=(-archivePath "$RUNNER_TEMP/apple-$platform.xcarchive" CODE_SIGNING_ALLOWED=NO SKIP_INSTALL=NO)
+              else
+                args+=(-resultBundlePath "$RUNNER_TEMP/apple-$platform.xcresult")
+              fi
               if test -n "$APPLE_PROJECT"; then args+=(-project "$GITHUB_WORKSPACE/$APPLE_PROJECT"); fi
               if test -n "$APPLE_WORKSPACE"; then args+=(-workspace "$GITHUB_WORKSPACE/$APPLE_WORKSPACE"); fi
               args+=(-destination "$execution_destination")
               action=build
               test "$APPLE_TASK" = xcode-test && action=test
+              test "$APPLE_TASK" = xcode-archive && action=archive
               xcodebuild "$action" "${args[@]}" 2>&1 | tee "$log"
               ;;
           esac
@@ -317,6 +333,54 @@ jobs:
           done
           [[ $result_count -gt 0 ]] || admitted=false
           echo "xcresult_admitted=$admitted" >> "$GITHUB_OUTPUT"
+          archive="$RUNNER_TEMP/apple-ios-simulator.xcarchive"
+          archive_admitted=false
+          if [[ "$APPLE_TASK" == xcode-archive ]]; then
+            if python3 - "$archive" <<'PY'
+          import os
+          import stat
+          import sys
+          from pathlib import Path
+
+          archive = Path(sys.argv[1])
+          total = 0
+          admitted = False
+          try:
+              if stat.S_ISDIR(archive.lstat().st_mode):
+                  if stat.S_ISREG((archive / "Info.plist").lstat().st_mode):
+                      pending = [archive]
+                      admitted = True
+                      while pending and admitted:
+                          directory = pending.pop()
+                          with os.scandir(directory) as entries:
+                              for entry in entries:
+                                  entry_stat = entry.stat(follow_symlinks=False)
+                                  if stat.S_ISDIR(entry_stat.st_mode):
+                                      pending.append(Path(entry.path))
+                                  elif stat.S_ISREG(entry_stat.st_mode):
+                                      total += entry_stat.st_size
+                                      if total > 268435456:
+                                          admitted = False
+                                          break
+                                  else:
+                                      admitted = False
+                                      break
+          except (OSError, ValueError):
+              admitted = False
+
+          if not admitted:
+              print("archive rejected: missing, unsafe, unreadable, or over the size limit", file=sys.stderr)
+              raise SystemExit(1)
+          PY
+            then
+              archive_admitted=true
+            fi
+          fi
+          echo "xcarchive_admitted=$archive_admitted" >> "$GITHUB_OUTPUT"
+          if [[ "$APPLE_TASK" == xcode-archive && "$archive_admitted" != true ]]; then
+            echo 'Xcode archive failed bounded archive admission' >&2
+            exit 1
+          fi
 
       - name: Upload Apple log
         if: always() && steps.evidence.outputs.log_admitted == 'true'
@@ -349,6 +413,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 0
+
+      - name: Upload bounded iOS Simulator archive
+        if: steps.evidence.outputs.xcarchive_admitted == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: apple-xcarchive-ios-simulator-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/apple-ios-simulator.xcarchive
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
 
   ios_log_capture:
     if: ${{ github.event.repository.private == true && inputs.task == 'ios-log-capture' }}
