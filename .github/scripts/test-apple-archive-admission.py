@@ -1,19 +1,30 @@
 import importlib.util
 import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
-from unittest import mock
 
 
-MODULE_PATH = Path(__file__).with_name("apple-archive-admission.py")
-SPEC = importlib.util.spec_from_file_location("apple_archive_admission", MODULE_PATH)
-assert SPEC and SPEC.loader
-admission = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(admission)
+WORKFLOW_PATH = Path(__file__).parents[1] / "workflows" / "apple-build.yml"
+WORKFLOW = WORKFLOW_PATH.read_text()
+MARKER = 'if python3 - "$archive" <<\'PY\'\n'
+start = WORKFLOW.index(MARKER) + len(MARKER)
+end = WORKFLOW.index("\n          PY\n", start)
+ADMISSION_CODE = textwrap.dedent(WORKFLOW[start:end])
 
 
 class ArchiveAdmissionTests(unittest.TestCase):
+    def run_admission(self, archive: Path, code: str = ADMISSION_CODE) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-c", code, str(archive)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def make_archive(self, parent: str) -> Path:
         archive = Path(parent) / "Example.xcarchive"
         archive.mkdir()
@@ -24,15 +35,18 @@ class ArchiveAdmissionTests(unittest.TestCase):
 
     def test_valid_archive_is_admitted(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            self.assertTrue(admission.admit_archive(self.make_archive(temp)))
+            result = self.run_admission(self.make_archive(temp))
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_absent_archive_and_info_plist_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            self.assertFalse(admission.admit_archive(root / "missing.xcarchive"))
+            missing = self.run_admission(root / "missing.xcarchive")
+            self.assertNotEqual(missing.returncode, 0)
             archive = self.make_archive(temp)
             (archive / "Info.plist").unlink()
-            self.assertFalse(admission.admit_archive(archive))
+            absent_info = self.run_admission(archive)
+            self.assertNotEqual(absent_info.returncode, 0)
 
     def test_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -40,25 +54,35 @@ class ArchiveAdmissionTests(unittest.TestCase):
             target = Path(temp) / "outside"
             target.write_text("outside")
             (archive / "linked-file").symlink_to(target)
-            self.assertFalse(admission.admit_archive(archive))
+            result = self.run_admission(archive)
+            self.assertNotEqual(result.returncode, 0)
 
     def test_oversized_archive_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             archive = self.make_archive(temp)
-            self.assertFalse(admission.admit_archive(archive, max_bytes=4))
+            large_file = archive / "Products" / "large"
+            with large_file.open("wb") as stream:
+                stream.truncate(268435457)
+            result = self.run_admission(archive)
+            self.assertNotEqual(result.returncode, 0)
 
     def test_traversal_error_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             archive = self.make_archive(temp)
-            original_scandir = os.scandir
-
-            def failing_scandir(path):
-                if Path(path).name == "Products":
-                    raise PermissionError("simulated traversal error")
-                return original_scandir(path)
-
-            with mock.patch.object(admission.os, "scandir", side_effect=failing_scandir):
-                self.assertFalse(admission.admit_archive(archive))
+            injected_error = textwrap.dedent(
+                """\
+                import os
+                from pathlib import Path
+                original_scandir = os.scandir
+                def failing_scandir(path):
+                    if Path(path).name == "Products":
+                        raise PermissionError("simulated traversal error")
+                    return original_scandir(path)
+                os.scandir = failing_scandir
+                """
+            )
+            result = self.run_admission(archive, injected_error + ADMISSION_CODE)
+            self.assertNotEqual(result.returncode, 0)
 
     def test_special_entry_is_rejected(self) -> None:
         if not hasattr(os, "mkfifo"):
@@ -66,7 +90,8 @@ class ArchiveAdmissionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             archive = self.make_archive(temp)
             os.mkfifo(archive / "special")
-            self.assertFalse(admission.admit_archive(archive))
+            result = self.run_admission(archive)
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

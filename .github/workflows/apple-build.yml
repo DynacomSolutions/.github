@@ -335,8 +335,46 @@ jobs:
           echo "xcresult_admitted=$admitted" >> "$GITHUB_OUTPUT"
           archive="$RUNNER_TEMP/apple-ios-simulator.xcarchive"
           archive_admitted=false
-          if [[ "$APPLE_TASK" == xcode-archive ]] && python3 "$GITHUB_WORKSPACE/.github/scripts/apple-archive-admission.py" "$archive"; then
-            archive_admitted=true
+          if [[ "$APPLE_TASK" == xcode-archive ]]; then
+            if python3 - "$archive" <<'PY'
+          import os
+          import stat
+          import sys
+          from pathlib import Path
+
+          archive = Path(sys.argv[1])
+          total = 0
+          admitted = False
+          try:
+              if stat.S_ISDIR(archive.lstat().st_mode):
+                  if stat.S_ISREG((archive / "Info.plist").lstat().st_mode):
+                      pending = [archive]
+                      admitted = True
+                      while pending and admitted:
+                          directory = pending.pop()
+                          with os.scandir(directory) as entries:
+                              for entry in entries:
+                                  entry_stat = entry.stat(follow_symlinks=False)
+                                  if stat.S_ISDIR(entry_stat.st_mode):
+                                      pending.append(Path(entry.path))
+                                  elif stat.S_ISREG(entry_stat.st_mode):
+                                      total += entry_stat.st_size
+                                      if total > 268435456:
+                                          admitted = False
+                                          break
+                                  else:
+                                      admitted = False
+                                      break
+          except (OSError, ValueError):
+              admitted = False
+
+          if not admitted:
+              print("archive rejected: missing, unsafe, unreadable, or over the size limit", file=sys.stderr)
+              raise SystemExit(1)
+          PY
+            then
+              archive_admitted=true
+            fi
           fi
           echo "xcarchive_admitted=$archive_admitted" >> "$GITHUB_OUTPUT"
           if [[ "$APPLE_TASK" == xcode-archive && "$archive_admitted" != true ]]; then
