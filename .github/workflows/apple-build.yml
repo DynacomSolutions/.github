@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       source-repository:
-        description: Optional explicit source repository; explicit provenance is Ergon-only
+        description: Optional explicit source repository; explicit provenance is Ergon-only except the Playarr Simulator test dispatcher
         required: false
         default: ""
         type: string
@@ -68,6 +68,10 @@ on:
         required: false
         default: macos
         type: string
+    secrets:
+      playarr_readonly_deploy_key:
+        description: Read-only key for the private Playarr source, used only by its test dispatcher
+        required: false
 
 permissions:
   contents: read
@@ -96,6 +100,8 @@ jobs:
       APPLE_SOURCE_REPOSITORY_INPUT: ${{ inputs.source-repository }}
       APPLE_SOURCE_REF: ${{ inputs.source-ref || github.sha }}
       APPLE_SOURCE_REF_INPUT: ${{ inputs.source-ref }}
+      GITHUB_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      HAS_PLAYARR_READONLY_DEPLOY_KEY: ${{ secrets.playarr_readonly_deploy_key != '' }}
       APPLE_INVOCATION_ID: ${{ inputs.invocation-id || format('{0}-{1}', github.run_id, github.run_attempt) }}
       APPLE_INVOCATION_ID_INPUT: ${{ inputs.invocation-id }}
     steps:
@@ -103,15 +109,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$APPLE_SOURCE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
-          if [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" || -n "$APPLE_SOURCE_REF_INPUT" || -n "$APPLE_INVOCATION_ID_INPUT" ]]; then
-            [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" && -n "$APPLE_SOURCE_REF_INPUT" && -n "$APPLE_INVOCATION_ID_INPUT" ]]
-            [[ "$GITHUB_REPOSITORY" == "DynacomSolutions/ergon" ]]
-            [[ "$APPLE_SOURCE_REPOSITORY" == "DynacomSolutions/ergon" ]]
+          [[ "$GITHUB_REPOSITORY_PRIVATE" == true ]]
+          if [[ "$GITHUB_REPOSITORY" == "DynacomSolutions/playarr-apple-builds" ]]; then
+            [[ "$APPLE_TASK" == xcode-test ]]
+            [[ "$APPLE_SOURCE_REPOSITORY_INPUT" == "ThomasMcFarlane/playarr" ]]
+            [[ "$APPLE_SOURCE_REPOSITORY" == "ThomasMcFarlane/playarr" ]]
+            [[ -n "$APPLE_SOURCE_REF_INPUT" && -z "$APPLE_INVOCATION_ID_INPUT" ]]
             [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
-            [[ "$APPLE_INVOCATION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+            [[ "$HAS_PLAYARR_READONLY_DEPLOY_KEY" == true ]]
           else
-            [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$HAS_PLAYARR_READONLY_DEPLOY_KEY" == false ]]
+            [[ "$APPLE_SOURCE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+            if [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" || -n "$APPLE_SOURCE_REF_INPUT" || -n "$APPLE_INVOCATION_ID_INPUT" ]]; then
+              [[ -n "$APPLE_SOURCE_REPOSITORY_INPUT" && -n "$APPLE_SOURCE_REF_INPUT" && -n "$APPLE_INVOCATION_ID_INPUT" ]]
+              [[ "$GITHUB_REPOSITORY" == "DynacomSolutions/ergon" ]]
+              [[ "$APPLE_SOURCE_REPOSITORY" == "DynacomSolutions/ergon" ]]
+              [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+              [[ "$APPLE_INVOCATION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+            else
+              [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+            fi
           fi
           case "$APPLE_TASK" in toolchain|swift-test|xcode-build|xcode-test|xcode-archive) ;; *) exit 2 ;; esac
           [[ "$APPLE_WORKING_DIRECTORY" != /* ]]
@@ -121,6 +138,7 @@ jobs:
         with:
           repository: ${{ env.APPLE_SOURCE_REPOSITORY }}
           ref: ${{ env.APPLE_SOURCE_REF }}
+          ssh-key: ${{ github.repository == 'DynacomSolutions/playarr-apple-builds' && inputs.task == 'xcode-test' && secrets.playarr_readonly_deploy_key || '' }}
           clean: true
           persist-credentials: false
 
@@ -250,7 +268,12 @@ jobs:
                   platform=ios-simulator
                   execution_destination="$APPLE_DESTINATION"
                   ;;
-                *) echo 'Xcode tasks require macos or a concrete macOS/iOS Simulator platform destination' >&2; exit 2 ;;
+                platform=tvos\ simulator,name=*|platform=tvos\ simulator,id=*)
+                  [[ "$destination_lower" =~ ^platform=tvos[[:space:]]simulator,(name|id)=[^,]+(,os=[^,]+)?$ ]] || exit 2
+                  platform=tvos-simulator
+                  execution_destination="$APPLE_DESTINATION"
+                  ;;
+                *) echo 'Xcode tasks require macos or a concrete macOS, iOS Simulator or tvOS Simulator platform destination' >&2; exit 2 ;;
               esac
               if [[ "$APPLE_TASK" == xcode-archive && "$execution_destination" != 'generic/platform=iOS Simulator' ]]; then
                 echo 'Archive task requires generic/platform=iOS Simulator' >&2

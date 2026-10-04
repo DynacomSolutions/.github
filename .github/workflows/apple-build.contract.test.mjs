@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -7,6 +8,48 @@ const workflow = readFileSync(
   fileURLToPath(new URL("./apple-build.yml", import.meta.url)),
   "utf8",
 );
+
+const validationScript = (() => {
+  const match = workflow.match(
+    /- name: Validate immutable source and invocation\n\s+shell: bash\n\s+run: \|\n((?:\s{10,}.*\n)+)/,
+  );
+  assert.ok(match, "workflow is missing source validation script");
+  return match[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {10}/, ""))
+    .join("\n");
+})();
+
+const validateSource = ({
+  caller = "DynacomSolutions/playarr-apple-builds",
+  privateRepository = "true",
+  task = "xcode-test",
+  sourceRepository = "ThomasMcFarlane/playarr",
+  sourceRepositoryInput = sourceRepository,
+  sourceRef = "389f36ba0d1acb6c0990275f58d946880d432318",
+  sourceRefInput = sourceRef,
+  invocationId = "",
+  hasDeployKey = "true",
+} = {}) =>
+  spawnSync("bash", ["-euo", "pipefail", "-c", validationScript], {
+    env: {
+      ...process.env,
+      GITHUB_REPOSITORY: caller,
+      GITHUB_REPOSITORY_PRIVATE: privateRepository,
+      APPLE_TASK: task,
+      APPLE_SOURCE_REPOSITORY: sourceRepository,
+      APPLE_SOURCE_REPOSITORY_INPUT: sourceRepositoryInput,
+      APPLE_SOURCE_REF: sourceRef,
+      APPLE_SOURCE_REF_INPUT: sourceRefInput,
+      APPLE_INVOCATION_ID: invocationId || "run-1-1",
+      APPLE_INVOCATION_ID_INPUT: invocationId,
+      HAS_PLAYARR_READONLY_DEPLOY_KEY: hasDeployKey,
+      APPLE_WORKING_DIRECTORY: ".",
+      APPLE_PROJECT: "clients/ios/Playarr.xcodeproj",
+      APPLE_WORKSPACE: "",
+    },
+    encoding: "utf8",
+  });
 
 const jobBlock = (name) => {
   const jobsStart = workflow.indexOf("\njobs:\n");
@@ -34,9 +77,21 @@ describe("Apple reusable workflow contract", () => {
       workflow,
       /invocation-id:[\s\S]*?required: false[\s\S]*?default: ""[\s\S]*?type: string/,
     );
+    assert.match(
+      workflow,
+      /playarr_readonly_deploy_key:[\s\S]*?required: false/,
+    );
     assert.match(apple, /if: \$\{\{ github\.event\.repository\.private == true && inputs\.task != 'ios-log-capture' && inputs\.task != 'ios-interactive-session' \}\}/);
     assert.match(workflow, /inputs\.source-repository \|\| github\.repository/);
     assert.match(workflow, /inputs\.source-ref \|\| github\.sha/);
+    assert.match(
+      workflow,
+      /ssh-key: \$\{\{ github\.repository == 'DynacomSolutions\/playarr-apple-builds' && inputs\.task == 'xcode-test' && secrets\.playarr_readonly_deploy_key \|\| '' \}\}/,
+    );
+    assert.match(
+      workflow,
+      /HAS_PLAYARR_READONLY_DEPLOY_KEY: \$\{\{ secrets\.playarr_readonly_deploy_key != '' \}\}/,
+    );
     assert.match(
       workflow,
       /\[\[ "\$APPLE_SOURCE_REPOSITORY" == "\$GITHUB_REPOSITORY" \]\]/,
@@ -51,6 +106,29 @@ describe("Apple reusable workflow contract", () => {
     );
     assert.match(workflow, /DynacomSolutions\/ergon/);
     assert.match(workflow, /\^\[0-9a-f\]\{40\}\$/);
+  });
+
+  it("admits only the private Playarr test dispatcher for explicit Playarr source", () => {
+    assert.equal(validateSource().status, 0);
+    assert.notEqual(validateSource({ hasDeployKey: "false" }).status, 0);
+    assert.notEqual(validateSource({ caller: "DynacomSolutions/other" }).status, 0);
+    assert.notEqual(validateSource({ task: "xcode-build" }).status, 0);
+    assert.notEqual(validateSource({ privateRepository: "false" }).status, 0);
+    assert.notEqual(validateSource({ sourceRef: "main" }).status, 0);
+    assert.notEqual(validateSource({ sourceRepository: "DynacomSolutions/playarr-apple-builds" }).status, 0);
+    assert.notEqual(
+      validateSource({
+        caller: "DynacomSolutions/legacy-caller",
+        sourceRepository: "DynacomSolutions/legacy-caller",
+        sourceRepositoryInput: "",
+        sourceRefInput: "",
+      }).status,
+      0,
+    );
+    assert.notEqual(
+      validateSource({ caller: "DynacomSolutions/ergon", sourceRepository: "ThomasMcFarlane/playarr" }).status,
+      0,
+    );
   });
 
   it("isolates the specialised iOS jobs behind private Ergon workflow-dispatch gates", () => {
@@ -100,6 +178,8 @@ describe("Apple reusable workflow contract", () => {
       workflow,
       /\^platform=ios\[\[:space:\]\]simulator,\(name\|id\)=\[\^,\]\+\(,os=\[\^,\]\+\)\?\$/,
     );
+    assert.match(workflow, /platform=tvos\\ simulator,name=\*\|platform=tvos\\ simulator,id=\*/);
+    assert.match(workflow, /platform=tvos-simulator/);
     assert.match(workflow, /git rev-parse HEAD/);
     assert.match(workflow, /actualHeadSha/);
     assert.match(workflow, /apple-toolchain-inventory\.json/);
