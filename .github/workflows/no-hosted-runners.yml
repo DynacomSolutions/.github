@@ -87,9 +87,14 @@ jobs:
           HOSTED = re.compile(r"(?<![\w.-])(ubuntu|macos|windows)-[\w.-]+", re.I)
           offenders = []  # (file, line, label)
 
+          # Self-hosted runner groups whose names merely look like hosted labels.
+          SELF_HOSTED_GROUPS = {"windows-builders"}
+
           def check(path, labels):
               """labels: list of (line, text) making up one runs-on selection."""
               for ln, t in labels:
+                  if t.strip() in SELF_HOSTED_GROUPS:
+                      continue
                   for m in HOSTED.finditer(t):
                       offenders.append((path, ln, m.group(0)))
               if any(t.strip().lower() == "self-hosted" for _, t in labels):
