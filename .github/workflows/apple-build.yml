@@ -196,6 +196,89 @@ jobs:
           [[ "$actual" == "$APPLE_SOURCE_REF" ]]
           printf 'actual_head_sha=%s\n' "$actual" >> "$GITHUB_OUTPUT"
 
+      - name: Capture installed Xcode installations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          candidates = {app.resolve() for app in pathlib.Path('/Applications').glob('Xcode*.app')}
+          active_developer_dir = pathlib.Path(subprocess.check_output(
+              ['/usr/bin/xcode-select', '-p'], text=True
+          ).strip())
+          for parent in active_developer_dir.parents:
+              if parent.suffix == '.app':
+                  candidates.add(parent.resolve())
+                  break
+
+          installations = []
+          for app in sorted(candidates, key=lambda item: str(item).casefold()):
+              developer_dir = app / 'Contents' / 'Developer'
+              if not developer_dir.is_dir():
+                  installations.append({
+                      'path': str(app.resolve()),
+                      'status': 'unavailable',
+                      'reason': 'missing Contents/Developer directory',
+                  })
+                  continue
+              environment = {**os.environ, 'DEVELOPER_DIR': str(developer_dir)}
+              try:
+                  result = subprocess.run(
+                      ['/usr/bin/xcodebuild', '-version'],
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                      timeout=20,
+                      env=environment,
+                  )
+              except subprocess.TimeoutExpired:
+                  installations.append({
+                      'path': str(app.resolve()),
+                      'developerDirectory': str(developer_dir.resolve()),
+                      'status': 'unavailable',
+                      'reason': 'xcodebuild -version timed out after 20 seconds',
+                  })
+                  continue
+              except subprocess.CalledProcessError as error:
+                  installations.append({
+                      'path': str(app.resolve()),
+                      'developerDirectory': str(developer_dir.resolve()),
+                      'status': 'unavailable',
+                      'reason': f'xcodebuild -version exited {error.returncode}',
+                  })
+                  continue
+              except OSError as error:
+                  installations.append({
+                      'path': str(app.resolve()),
+                      'developerDirectory': str(developer_dir.resolve()),
+                      'status': 'unavailable',
+                      'reason': f'xcodebuild could not run: {error.__class__.__name__}',
+                  })
+                  continue
+              lines = result.stdout.splitlines()
+              version = next((line.removeprefix('Xcode ') for line in lines if line.startswith('Xcode ')), '')
+              build = next((line.removeprefix('Build version ') for line in lines if line.startswith('Build version ')), '')
+              installation = {
+                  'path': str(app),
+                  'developerDirectory': str(developer_dir.resolve()),
+                  'status': 'available' if version else 'unavailable',
+                  'selected': developer_dir.resolve() == active_developer_dir.resolve(),
+              }
+              if version:
+                  installation.update({'version': version, 'build': build})
+              else:
+                  installation['reason'] = 'xcodebuild -version returned no version'
+              installations.append(installation)
+
+          (root / 'installed-xcodes.json').write_text(
+              json.dumps(installations, separators=(',', ':')) + '\n'
+          )
+          PY
+          test -s "$RUNNER_TEMP/installed-xcodes.json"
+          test "$(wc -c < "$RUNNER_TEMP/installed-xcodes.json")" -le 1048576
+
       - name: Capture bounded Apple toolchain inventory
         shell: bash
         run: |
@@ -209,6 +292,7 @@ jobs:
           import json, os, pathlib, platform, re
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
           xcode = (root / 'xcode-version.txt').read_text().splitlines()
+          installed_xcodes = json.loads((root / 'installed-xcodes.json').read_text())
           swift = (root / 'swift-version.txt').read_text().splitlines()
           sdk_text = (root / 'xcode-sdks.txt').read_text().splitlines()
           runtime_data = json.loads((root / 'simulator-runtimes.json').read_text())
@@ -226,6 +310,7 @@ jobs:
               'schemaVersion': 1,
               'executor': {'runnerGroup': 'apple-builders', 'runnerLabel': 'apple-builder', 'runnerOs': platform.system(), 'runnerArch': platform.machine()},
               'xcode': {'version': version, 'build': build},
+              'installedXcodes': installed_xcodes,
               'swift': {'version': next((line for line in swift if line.startswith('Apple Swift version ')), swift[0] if swift else '')},
               'sdks': sdks,
               'simulatorRuntimes': runtimes,
@@ -244,6 +329,7 @@ jobs:
           PY
           test -s "$RUNNER_TEMP/apple-toolchain-inventory.json"
           test "$(wc -c < "$RUNNER_TEMP/apple-toolchain-inventory.json")" -le 1048576
+          test "$(wc -c < "$RUNNER_TEMP/installed-xcodes.json")" -le 1048576
           test "$(wc -c < "$RUNNER_TEMP/apple-run-manifest.json")" -le 1048576
           test -s "$RUNNER_TEMP/apple-run-manifest.json"
 
