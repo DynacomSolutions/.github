@@ -335,31 +335,14 @@ jobs:
           echo "xcresult_admitted=$admitted" >> "$GITHUB_OUTPUT"
           archive="$RUNNER_TEMP/apple-ios-simulator.xcarchive"
           archive_admitted=false
-          if [[ "$APPLE_TASK" == xcode-archive && ! -L "$archive" && -d "$archive" && -f "$archive/Info.plist" ]]; then
-            archive_bytes="$(python3 - "$archive" <<'PY'
-          import os, sys
-          root = sys.argv[1]
-          total = 0
-          for directory, directories, files in os.walk(root, followlinks=False):
-              for name in directories + files:
-                  path = os.path.join(directory, name)
-                  if os.path.islink(path) or not os.path.realpath(path).startswith(root + os.sep):
-                      print('unsafe')
-                      sys.exit(0)
-              for name in files:
-                  path = os.path.join(directory, name)
-                  total += os.path.getsize(path)
-                  if total > 268435456:
-                      print('oversized')
-                      sys.exit(0)
-          print(total)
-          PY
-            )"
-            if [[ "$archive_bytes" =~ ^[0-9]+$ ]] && (( archive_bytes <= 268435456 )); then
-              archive_admitted=true
-            fi
+          if [[ "$APPLE_TASK" == xcode-archive ]] && python3 "$GITHUB_WORKSPACE/.github/scripts/apple-archive-admission.py" "$archive"; then
+            archive_admitted=true
           fi
           echo "xcarchive_admitted=$archive_admitted" >> "$GITHUB_OUTPUT"
+          if [[ "$APPLE_TASK" == xcode-archive && "$archive_admitted" != true ]]; then
+            echo 'Xcode archive failed bounded archive admission' >&2
+            exit 1
+          fi
 
       - name: Upload Apple log
         if: always() && steps.evidence.outputs.log_admitted == 'true'
