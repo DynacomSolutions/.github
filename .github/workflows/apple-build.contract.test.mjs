@@ -33,7 +33,7 @@ const validateSource = ({
   workingDirectory = "clients/ios",
   project = "",
   workspace = "clients/ios/Playarr.xcworkspace",
-  scheme = "StreamarrApp",
+  scheme = "PlayarrApp",
 } = {}) =>
   spawnSync("bash", ["-euo", "pipefail", "-c", validationScript], {
     env: {
@@ -129,7 +129,7 @@ describe("Apple reusable workflow contract", () => {
     assert.notEqual(validateSource({ task: "xcode-build" }).status, 0);
     assert.notEqual(validateSource({ privateRepository: "false" }).status, 0);
     assert.notEqual(validateSource({ sourceRef: "main" }).status, 0);
-    assert.notEqual(validateSource({ scheme: "PlayarrApp" }).status, 0);
+    assert.notEqual(validateSource({ scheme: "StreamarrApp" }).status, 0);
     assert.notEqual(validateSource({ project: "clients/ios/Playarr.xcodeproj" }).status, 0);
     assert.notEqual(
       validateSource({ workingDirectory: "clients/other" }).status,

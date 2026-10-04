@@ -120,7 +120,7 @@ jobs:
             case "$APPLE_WORKING_DIRECTORY" in
               clients/ios)
                 [[ -z "$APPLE_PROJECT" && "$APPLE_WORKSPACE" == clients/ios/Playarr.xcworkspace ]]
-                [[ "$APPLE_SCHEME" == StreamarrApp ]]
+                [[ "$APPLE_SCHEME" == PlayarrApp ]]
                 ;;
               clients/apple-tv)
                 [[ -z "$APPLE_WORKSPACE" && "$APPLE_PROJECT" == clients/apple-tv/PlayarrTV.xcodeproj ]]
