@@ -172,6 +172,11 @@ describe("Apple reusable workflow contract", () => {
     assert.match(workflow, /persist-credentials: false/);
     assert.doesNotMatch(workflow, /APPLE_DESTINATION,,/);
     assert.match(workflow, /args\+=\(-destination "\$execution_destination"\)/);
+    assert.match(workflow, /name: Create isolated Playarr test simulator[\s\S]*?github\.repository == 'DynacomSolutions\/playarr-apple-builds'[\s\S]*?inputs\.task == 'xcode-test'[\s\S]*?uses: DynacomSolutions\/\.github\/\.github\/actions\/apple-test-simulator@main/);
+    assert.match(workflow, /APPLE_TEST_SIMULATOR_UDID: \$\{\{ steps\.playarr_simulator\.outputs\.udid \}\}/);
+    assert.match(workflow, /execution_destination="platform=iOS Simulator,id=\$APPLE_TEST_SIMULATOR_UDID"/);
+    assert.match(workflow, /execution_destination="platform=tvOS Simulator,id=\$APPLE_TEST_SIMULATOR_UDID"/);
+    assert.match(workflow, /Create isolated Playarr test simulator[\s\S]*?startsWith\(inputs\.destination, 'platform=iOS Simulator,'\)[\s\S]*?startsWith\(inputs\.destination, 'platform=tvOS Simulator,'\)/);
     assert.match(workflow, /\$APPLE_TASK runs on the macOS host/);
     assert.match(workflow, /\^platform=macos,\(arch\|variant\)=\[\^,\]\+\$/);
     assert.match(

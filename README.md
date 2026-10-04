@@ -34,3 +34,9 @@ Available tasks are `toolchain`, `swift-test`, `xcode-build` and `xcode-test`.
 Simulator destinations support iOS and tvOS. The job routes to the protected
 `apple-builders` runner group. Live capacity is published in the platform
 cluster through `kubectl get externalworkers`.
+
+For the private Playarr `xcode-test` dispatcher only, an iOS or tvOS Simulator
+destination is backed by one disposable device created from an already-installed
+compatible runtime. The workflow passes that new device's UDID to `xcodebuild`
+and deletes only that UDID in the action's post-job cleanup. It does not install
+runtimes or remove pre-existing devices.

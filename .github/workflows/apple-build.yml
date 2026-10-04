@@ -231,9 +231,18 @@ jobs:
           test "$(wc -c < "$RUNNER_TEMP/apple-run-manifest.json")" -le 1048576
           test -s "$RUNNER_TEMP/apple-run-manifest.json"
 
+      - name: Create isolated Playarr test simulator
+        id: playarr_simulator
+        if: ${{ github.repository == 'DynacomSolutions/playarr-apple-builds' && inputs.task == 'xcode-test' && (startsWith(inputs.destination, 'platform=iOS Simulator,') || startsWith(inputs.destination, 'platform=tvOS Simulator,')) }}
+        uses: DynacomSolutions/.github/.github/actions/apple-test-simulator@main
+        with:
+          destination: ${{ inputs.destination }}
+
       - name: Run declared Apple task
         id: apple_task
         shell: bash
+        env:
+          APPLE_TEST_SIMULATOR_UDID: ${{ steps.playarr_simulator.outputs.udid }}
         run: |
           set -euo pipefail
           workdir="$GITHUB_WORKSPACE/$APPLE_WORKING_DIRECTORY"
@@ -267,11 +276,19 @@ jobs:
                   [[ "$destination_lower" =~ ^platform=ios[[:space:]]simulator,(name|id)=[^,]+(,os=[^,]+)?$ ]] || exit 2
                   platform=ios-simulator
                   execution_destination="$APPLE_DESTINATION"
+                  if [[ "$GITHUB_REPOSITORY" == DynacomSolutions/playarr-apple-builds && "$APPLE_TASK" == xcode-test ]]; then
+                    [[ "$APPLE_TEST_SIMULATOR_UDID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo 'Isolated iOS Simulator was not created' >&2; exit 2; }
+                    execution_destination="platform=iOS Simulator,id=$APPLE_TEST_SIMULATOR_UDID"
+                  fi
                   ;;
                 platform=tvos\ simulator,name=*|platform=tvos\ simulator,id=*)
                   [[ "$destination_lower" =~ ^platform=tvos[[:space:]]simulator,(name|id)=[^,]+(,os=[^,]+)?$ ]] || exit 2
                   platform=tvos-simulator
                   execution_destination="$APPLE_DESTINATION"
+                  if [[ "$GITHUB_REPOSITORY" == DynacomSolutions/playarr-apple-builds && "$APPLE_TASK" == xcode-test ]]; then
+                    [[ "$APPLE_TEST_SIMULATOR_UDID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo 'Isolated tvOS Simulator was not created' >&2; exit 2; }
+                    execution_destination="platform=tvOS Simulator,id=$APPLE_TEST_SIMULATOR_UDID"
+                  fi
                   ;;
                 *) echo 'Xcode tasks require macos or a concrete macOS, iOS Simulator or tvOS Simulator platform destination' >&2; exit 2 ;;
               esac
