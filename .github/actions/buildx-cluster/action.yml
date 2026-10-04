@@ -40,6 +40,21 @@ outputs:
   cache-to:
     description: Value for the build-push-action cache-to input (empty when this build should not export).
     value: ${{ steps.setup.outputs.cache-to }}
+  cache-base:
+    description: >-
+      Registry cache repository prefix for this repository, without a name or tag. For
+      workflows that build several images in one job: use
+      type=registry,ref=<cache-base>/<name>:<cache-slug>.
+    value: ${{ steps.setup.outputs.cache-base }}
+  cache-slug:
+    description: Cache tag for the current branch.
+    value: ${{ steps.setup.outputs.cache-slug }}
+  cache-default-slug:
+    description: Cache tag for the default branch, used as the fallback import.
+    value: ${{ steps.setup.outputs.cache-default-slug }}
+  cache-export:
+    description: true when this build should export the registry cache (see push-cache), otherwise false.
+    value: ${{ steps.setup.outputs.cache-export }}
 
 runs:
   using: composite
@@ -96,18 +111,22 @@ runs:
 
         cache_from=""
         cache_to=""
+        prefix=""
+        slug=""
+        default_slug=""
+        export_cache=false
         if [ -n "$registry" ]; then
           repo="$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')"
           name="$(printf '%s' "$IN_CACHE_NAME" | tr -c 'a-zA-Z0-9._-' '-')"
           ref="${HEAD_REF:-$REF_NAME}"
           slug="$(printf '%s' "$ref" | tr -c 'a-zA-Z0-9._-' '-' | cut -c1-100)"
-          base="${registry}/buildcache/${repo}/${name}"
+          prefix="${registry}/buildcache/${repo}"
+          base="${prefix}/${name}"
           default_slug="$(printf '%s' "${DEFAULT_BRANCH:-main}" | tr -c 'a-zA-Z0-9._-' '-')"
           cache_from="type=registry,ref=${base}:${slug}"
           if [ "$slug" != "$default_slug" ]; then
             cache_from="${cache_from}"$'\n'"type=registry,ref=${base}:${default_slug}"
           fi
-          export_cache=false
           case "$IN_PUSH_CACHE" in
             true) export_cache=true ;;
             auto) if [ "$EVENT_NAME" != pull_request ] && [ "$slug" = "$default_slug" ]; then export_cache=true; fi ;;
@@ -124,5 +143,9 @@ runs:
           echo "$cache_from"
           echo "EOF_CACHE"
           echo "cache-to=${cache_to}"
+          echo "cache-base=${prefix}"
+          echo "cache-slug=${slug}"
+          echo "cache-default-slug=${default_slug}"
+          echo "cache-export=${export_cache}"
         } >> "$GITHUB_OUTPUT"
         echo "buildx builder: ${builder} (${driver})"

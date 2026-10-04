@@ -32,3 +32,18 @@ because of it. Without the variables it still works as a plain buildx setup.
 `push-cache: auto` (default) exports the registry cache only on pushes to the
 default branch; pull requests import it. The node-local layer cache is used by
 every build regardless.
+
+## Several images in one job
+
+Call the action once, then build each image against its own cache repository
+using the prefix outputs:
+
+```yaml
+- id: bx
+  uses: DynacomSolutions/.github/.github/actions/buildx-cluster@main
+- run: |
+    docker buildx build --builder "${{ steps.bx.outputs.builder }}" --load \
+      --cache-from "type=registry,ref=${{ steps.bx.outputs.cache-base }}/core:${{ steps.bx.outputs.cache-default-slug }}" \
+      ${{ steps.bx.outputs.cache-export == 'true' && format('--cache-to "type=registry,ref={0}/core:{1},mode=max,image-manifest=true,oci-mediatypes=true"', steps.bx.outputs.cache-base, steps.bx.outputs.cache-slug) || '' }} \
+      -t core:ci .
+```
