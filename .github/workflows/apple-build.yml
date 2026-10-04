@@ -117,6 +117,17 @@ jobs:
             [[ -n "$APPLE_SOURCE_REF_INPUT" && -z "$APPLE_INVOCATION_ID_INPUT" ]]
             [[ "$APPLE_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
             [[ "$HAS_PLAYARR_READONLY_DEPLOY_KEY" == true ]]
+            case "$APPLE_WORKING_DIRECTORY" in
+              clients/ios)
+                [[ -z "$APPLE_PROJECT" && "$APPLE_WORKSPACE" == clients/ios/Playarr.xcworkspace ]]
+                [[ "$APPLE_SCHEME" == StreamarrApp ]]
+                ;;
+              clients/apple-tv)
+                [[ -z "$APPLE_WORKSPACE" && "$APPLE_PROJECT" == clients/apple-tv/PlayarrTV.xcodeproj ]]
+                [[ "$APPLE_SCHEME" == PlayarrTV ]]
+                ;;
+              *) exit 2 ;;
+            esac
           else
             [[ "$HAS_PLAYARR_READONLY_DEPLOY_KEY" == false ]]
             [[ "$APPLE_SOURCE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
@@ -141,6 +152,11 @@ jobs:
           ssh-key: ${{ github.repository == 'DynacomSolutions/playarr-apple-builds' && inputs.task == 'xcode-test' && secrets.playarr_readonly_deploy_key || '' }}
           clean: true
           persist-credentials: false
+
+      - name: Prepare Playarr iOS project and CocoaPods workspace
+        if: ${{ github.repository == 'DynacomSolutions/playarr-apple-builds' && inputs.task == 'xcode-test' && inputs.source-repository == 'ThomasMcFarlane/playarr' && inputs.working-directory == 'clients/ios' && inputs.project == '' && inputs.workspace == 'clients/ios/Playarr.xcworkspace' }}
+        shell: bash
+        run: bash clients/ios/scripts/prepare.sh
 
       - name: Validate checkout-relative working paths
         shell: bash
