@@ -16,19 +16,33 @@ def scanner_source():
 
 
 class NoHostedRunnersScannerTest(unittest.TestCase):
-    def test_scanner_uses_static_shell_and_setup_python(self):
+    def test_scanner_uses_static_shell_and_pinned_runner_python_yaml(self):
         source = WORKFLOW.read_text()
         self.assertIn("        shell: bash\n", source)
+        # Runner's own Python must be exactly 3.12.
+        self.assertIn("python3 --version\n", source)
         self.assertIn(
-            "uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+            "sys.version_info[:2] != (3, 12)",
             source,
         )
-        self.assertIn("          python-version: '3.12'\n", source)
+        self.assertIn("Python 3.12 is required", source)
+        # YAML parser comes from a pinned source archive, verified by SHA-256.
+        self.assertIn("- name: Provision pinned YAML parser\n", source)
         self.assertIn(
-            "          python -m pip install --disable-pip-version-check --no-input PyYAML==6.0.2\n",
+            'url = "https://files.pythonhosted.org/packages/54/ed/79a089b6be93607fa5cdaedf301d7dfb23af5f25c398d5ead2525b063e17/pyyaml-6.0.2.tar.gz"',
             source,
         )
-        self.assertIn("          python - <<'PY'\n", source)
+        self.assertIn(
+            'expected = "d584d9ec91ad65861cc08d42e834324ef890a082e591037abe114850ff7bbc3e"',
+            source,
+        )
+        self.assertIn("hashlib.sha256(archive_bytes).hexdigest() != expected", source)
+        self.assertIn("PyYAML 6.0.2 source archive checksum mismatch", source)
+        self.assertIn('assert yaml.__version__ == "6.0.2"', source)
+        self.assertIn("          python3 - <<'PY'\n", source)
+        # No unpinned toolchain installs or dynamic shell.
+        self.assertNotIn("actions/setup-python", source)
+        self.assertNotIn("pip install", source)
         self.assertNotIn("shell: ${{ runner.temp }}", source)
 
     def run_scanner(self, workflow):
