@@ -15,7 +15,10 @@ jobs:
   no-hosted-runners:
     name: No GitHub-hosted runners
     if: github.event.repository.private
-    runs-on: ${{ github.repository == 'OWNER/REPO' && 'k3s-runners' || 'k3s-runners' }}
+    # Dedicated always-warm ARC pool (one idle runner, runner group visible to all
+    # private repositories). GitHub has no job priority, so on a repository's own
+    # pool this required check queued behind builds and timed out.
+    runs-on: k3s-guard
     timeout-minutes: 10
     steps:
       - name: Checkout target repository
