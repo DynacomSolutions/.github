@@ -15,9 +15,8 @@ jobs:
   no-hosted-runners:
     name: No GitHub-hosted runners
     if: github.event.repository.private
-    # Dedicated always-warm ARC pool (one idle runner, runner group visible to all
-    # private repositories). GitHub has no job priority, so on a repository's own
-    # pool this required check queued behind builds and timed out.
+    # Dedicated always-warm self-hosted runner pool. GitHub has no job priority, so
+    # on a busy shared pool this required check could queue behind builds and time out.
     runs-on: k3s-guard
     timeout-minutes: 10
     steps:
@@ -203,7 +202,7 @@ jobs:
               for path, line, label in sorted(set(offenders)):
                   print(f"::error file={path},line={line}::GitHub-hosted runner '{label}'")
                   print(f"{path}:{line}: GitHub-hosted runner '{label}'")
-              print("\nUse a self-hosted runner label (for example k3s-runners) instead.")
+              print("\nUse a self-hosted runner label instead.")
               sys.exit(1)
           print("OK: no GitHub-hosted runners referenced")
           PY

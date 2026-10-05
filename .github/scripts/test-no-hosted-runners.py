@@ -50,7 +50,7 @@ class RunnerScannerTests(unittest.TestCase):
                       matrix:
                         strategy:
                           matrix:
-                            runner: [k3s-runners]
+                            runner: [team-runners]
                         runs-on: ${{ matrix.runner }}
                 """
             }
@@ -68,7 +68,7 @@ class RunnerScannerTests(unittest.TestCase):
                       matrix:
                         strategy:
                           matrix:
-                            runner: [k3s-runners]
+                            runner: [team-runners]
                             include:
                               - runner: windows-latest
                         runs-on: ${{ matrix.runner }}
