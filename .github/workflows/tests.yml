@@ -33,6 +33,12 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install pinned PyYAML
+        timeout-minutes: 3
+        run: |
+          printf '%s\n' 'PyYAML==6.0.2 --hash=sha256:80bab7bfc629882493af4aa31a4cfa43a4c57c83813253626916b8c7ada83476' > "$RUNNER_TEMP/requirements.txt"
+          python3 -m pip install --disable-pip-version-check --no-input --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/requirements.txt"
+
       - name: No-hosted-runners scanner tests
         timeout-minutes: 3
         run: |
