@@ -45,6 +45,22 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
         self.assertNotIn("pip install", source)
         self.assertNotIn("shell: ${{ runner.temp }}", source)
 
+    def test_run_script_has_no_literal_expression_opener(self):
+        # GitHub evaluates expression openers inside run scripts, even in comments.
+        opener = "$" + "{{"
+        source = WORKFLOW.read_text()
+        self.assertNotIn(opener, scanner_source())
+        in_run = False
+        for number, line in enumerate(source.splitlines(), 1):
+            if line.strip().startswith("run:") and line.rstrip().endswith("|"):
+                in_run = True
+                indent = len(line) - len(line.lstrip())
+                continue
+            if in_run and line.strip() and len(line) - len(line.lstrip()) <= indent:
+                in_run = False
+            if in_run:
+                self.assertNotIn(opener, line, f"line {number}")
+
     def run_scanner(self, workflow):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
