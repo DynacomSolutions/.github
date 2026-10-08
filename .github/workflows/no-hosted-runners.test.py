@@ -78,6 +78,24 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_conditional_between_two_literal_self_hosted_labels_is_accepted(self):
+        runs_on = (
+            "${{ (github.event_name == 'push' || startsWith(github.head_ref, 'train/'))"
+            " && 'k3s-runners-main' || 'k3s-runners' }}"
+        )
+        result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_conditional_with_a_hosted_literal_branch_fails(self):
+        for runs_on in (
+            "${{ github.event_name == 'push' && 'k3s-runners-main' || 'ubuntu-latest' }}",
+            "${{ github.event_name == 'push' && 'windows-latest' || 'k3s-runners' }}",
+            "${{ github.event_name == 'push' && inputs.runner || 'k3s-runners' }}",
+        ):
+            with self.subTest(runs_on=runs_on):
+                result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_unresolved_dynamic_expression_fails_closed(self):
         result = self.run_scanner("jobs:\n  build:\n    runs-on: ${{ inputs.runner }}\n")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
