@@ -117,6 +117,44 @@ jobs:
 
           TERNARY = _Ternary
 
+          # GitHub expression delimiters, built piecewise so that this run script never holds a
+          # literal opener (GitHub evaluates openers inside run scripts, even in comments).
+          OPEN = "$" + "{" + "{"
+          CLOSE = "}" + "}"
+
+          def expressions_in(text):
+              """Return (expressions, ok). Each expression is the full opener..closer text.
+
+              The closer is only recognised outside single-quoted strings ('' is an escaped quote), so
+              braces inside strings or nested in the expression cannot end it early. An opener with no
+              closer makes ok False; callers must treat that as an offender (fail closed).
+              """
+              found = []
+              pos = 0
+              while True:
+                  start = text.find(OPEN, pos)
+                  if start < 0:
+                      return found, True
+                  i = start + len(OPEN)
+                  in_string = False
+                  while i < len(text):
+                      ch = text[i]
+                      if in_string:
+                          if ch == "'":
+                              if text[i + 1:i + 2] == "'":
+                                  i += 1
+                              else:
+                                  in_string = False
+                      elif ch == "'":
+                          in_string = True
+                      elif text.startswith(CLOSE, i):
+                          break
+                      i += 1
+                  else:
+                      return found, False
+                  found.append(text[start:i + len(CLOSE)])
+                  pos = i + len(CLOSE)
+
           # Self-hosted runner groups whose names merely look like hosted labels.
           SELF_HOSTED_GROUPS = {"windows-builders"}
 
@@ -182,8 +220,12 @@ jobs:
                           # Resolve only this job's matrix. Include entries can
                           # add runner values even when the base dimension is safe.
                           expressions = []
-                          for _, text in labels:
-                              expressions.extend(re.findall(r"\$\{\{[^}]*\}\}", text))
+                          for line, text in labels:
+                              found, ok = expressions_in(text)
+                              if not ok or (found and text.strip() != found[0]) or len(found) > 1:
+                                  # unterminated, embedded in other text, or several in one value
+                                  offenders.append((path, line, "unsupported runner expression"))
+                              expressions.extend(found)
                           matrix_refs = []
                           for expression in expressions:
                               match = re.fullmatch(r"\$\{\{\s*matrix\.([\w-]+)\s*\}\}", expression)
@@ -212,7 +254,7 @@ jobs:
                               if not found and not has_self_hosted_constraint:
                                   offenders.append((path, labels[0][0], "unresolved matrix expression"))
                           for line, text in labels:
-                              for expression in re.findall(r"\$\{\{[^}]*\}\}", text):
+                              for expression in expressions_in(text)[0]:
                                   if (
                                       not re.fullmatch(r"\$\{\{\s*matrix\.[\w-]+\s*\}\}", expression)
                                       and not TERNARY.fullmatch(expression)

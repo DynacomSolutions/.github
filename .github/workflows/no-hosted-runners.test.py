@@ -132,6 +132,44 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
         result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_function_calls_and_nested_braces_in_runs_on_fail_closed(self):
+        o, c = "$" + "{{", "}}"
+        for runs_on in (
+            o + " format('{0}-latest', 'ubuntu') " + c,
+            o + " x && format('{0}-24.04', 'ubuntu') || 'k3s-runners' " + c,
+            o + " join(fromJSON('[\"ubuntu\",\"latest\"]'), '-') " + c,
+            o + " fromJSON('\"ubuntu-latest\"') " + c,
+            o + " fromJSON(toJSON('ubuntu-latest')) " + c,
+            o + " toJSON('ubuntu-latest') " + c,
+            o + " fromJSON('{\"a\":{\"b\":\"ubuntu-latest\"}}').a.b " + c,
+            o + " x && '}' || format('{0}-latest', 'ubuntu') " + c,
+            o + " format('{0}}}-latest', 'ubuntu') " + c,
+            o + " x && 'k3s-runners' || 'k3s-runners'",
+            "ubuntu-" + o + " matrix.v " + c,
+            o + " 'k3s-runners' " + c + " " + o + " format('ubuntu-latest') " + c,
+        ):
+            with self.subTest(runs_on=runs_on):
+                quoted = '"' + runs_on.replace("\\", "\\\\").replace('"', '\\"') + '"'
+                result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {quoted}\n")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_function_calls_in_runs_on_list_and_group_forms_fail(self):
+        o, c = "$" + "{{", "}}"
+        expression = o + " format('{0}-latest', 'ubuntu') " + c
+        for runs_on in (
+            "['" + expression + "']",
+            "{group: x, labels: '" + expression + "'}",
+        ):
+            with self.subTest(runs_on=runs_on):
+                result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_brace_inside_a_literal_label_string_fails_closed(self):
+        o, c = "$" + "{{", "}}"
+        runs_on = o + " x && 'k3s-}-runners' || 'k3s-runners' " + c
+        result = self.run_scanner(f'jobs:\n  build:\n    runs-on: "{runs_on}"\n')
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_unresolved_dynamic_expression_fails_closed(self):
         result = self.run_scanner("jobs:\n  build:\n    runs-on: ${{ inputs.runner }}\n")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
