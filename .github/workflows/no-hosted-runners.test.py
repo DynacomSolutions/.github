@@ -170,6 +170,61 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
         result = self.run_scanner(f'jobs:\n  build:\n    runs-on: "{runs_on}"\n')
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_matrix_include_that_is_an_expression_or_has_non_mapping_items_fails(self):
+        o, c = "$" + "{{", "}}"
+        expression = o + " fromJSON(needs.prepare.outputs.extra) " + c
+        for include in (
+            f"'{expression}'",
+            f"[\"{expression}\"]",
+            "[plain-scalar]",
+            f"[{{runner: k3s-runners}}, \"{expression}\"]",
+        ):
+            with self.subTest(include=include):
+                result = self.run_scanner(
+                    "jobs:\n  build:\n    runs-on: " + o + " matrix.runner " + c + "\n"
+                    "    strategy:\n      matrix:\n        runner: [k3s-runners]\n"
+                    f"        include: {include}\n"
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_matrix_include_of_literal_mappings_is_still_accepted(self):
+        o, c = "$" + "{{", "}}"
+        result = self.run_scanner(
+            "jobs:\n  build:\n    runs-on: " + o + " matrix.runner " + c + "\n"
+            "    strategy:\n      matrix:\n        runner: [k3s-runners]\n"
+            "        include:\n          - runner: k3s-runners-main\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_external_reusable_workflow_fails_unless_allow_listed(self):
+        for uses, accepted in (
+            ("other-org/repo/.github/workflows/ci.yml@main", False),
+            ("DynacomSolutions/ergon/.github/workflows/ci.yml@main", False),
+            ("DynacomSolutions/.github-evil/.github/workflows/ci.yml@main", False),
+            ("./.github/workflows/local.yml", True),
+            ("DynacomSolutions/.github/.github/workflows/ci.yml@main", True),
+        ):
+            with self.subTest(uses=uses):
+                result = self.run_scanner(f"jobs:\n  call:\n    uses: {uses}\n")
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_group_only_runs_on_fails_unless_the_group_is_allow_listed(self):
+        for runs_on, accepted in (
+            ("{group: Default}", False),
+            ("{group: larger-hosted-runners}", False),
+            ("{}", False),
+            ("{group: windows-builders}", True),
+        ):
+            with self.subTest(runs_on=runs_on):
+                result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
+                if accepted:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_unresolved_dynamic_expression_fails_closed(self):
         result = self.run_scanner("jobs:\n  build:\n    runs-on: ${{ inputs.runner }}\n")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
