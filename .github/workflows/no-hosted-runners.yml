@@ -89,7 +89,7 @@ jobs:
           HOSTED = re.compile(r"(?<![\w.-])(ubuntu|macos|windows)-[\w.-]+", re.I)
           offenders = []  # (file, line, label)
 
-          # `${{ <condition> && 'label-a' || 'label-b' }}`: the condition only picks between two
+          # A ternary expression (condition, then 'label-a', then 'label-b'): the condition only picks between two
           # literal labels, so it is accepted when both literals pass the hosted-label check
           # (the HOSTED scan below covers the whole expression text, including the literals).
           TERNARY_SHAPE = re.compile(r"\$\{\{(?P<cond>[^{}]*?)&&\s*'[\w.-]+'\s*\|\|\s*'[\w.-]+'\s*\}\}")
