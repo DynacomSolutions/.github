@@ -203,6 +203,11 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
             ("DynacomSolutions/.github-evil/.github/workflows/ci.yml@main", False),
             ("./.github/workflows/local.yml", True),
             ("DynacomSolutions/.github/.github/workflows/ci.yml@main", True),
+            ("DynacomSolutions/.github/.github/workflows/ci.yml@0123456789abcdef0123456789abcdef01234567", False),
+            ("DynacomSolutions/.github/.github/workflows/ci.yml@v1", False),
+            ("DynacomSolutions/.github/.github/workflows/ci.yml@refs/heads/other", False),
+            ("DynacomSolutions/.github/.github/workflows/ci.yml", False),
+            ("DynacomSolutions/.github/.github/workflows/ci.yml@main#x", False),
         ):
             with self.subTest(uses=uses):
                 result = self.run_scanner(f"jobs:\n  call:\n    uses: {uses}\n")
@@ -216,6 +221,9 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
             ("{group: Default}", False),
             ("{group: larger-hosted-runners}", False),
             ("{}", False),
+            ("{group: hosted-larger, labels: []}", False),
+            ("{group: hosted-larger, labels: ''}", False),
+            ("{group: windows-builders, labels: []}", True),
             ("{group: windows-builders}", True),
         ):
             with self.subTest(runs_on=runs_on):

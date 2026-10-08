@@ -159,8 +159,12 @@ jobs:
           SELF_HOSTED_GROUPS = {"windows-builders"}
 
           # Reusable workflows from outside the scanned repository are rejected unless allow-listed.
-          # Workflows in the organisation's public .github repository are themselves guarded.
-          ALLOWED_REUSABLE_WORKFLOW_PREFIXES = ("DynacomSolutions/.github/.github/workflows/",)
+          # The organisation's .github repository is public and this guard does not scan it (the
+          # guard only runs on private repositories), so trust is limited to workflows on its main
+          # branch, which is changed by reviewed pull requests. SHAs and other refs are rejected.
+          ALLOWED_REUSABLE_WORKFLOW = re.compile(
+              r"DynacomSolutions/\.github/\.github/workflows/[\w.-]+\.ya?ml@main"
+          )
 
           def check(path, labels):
               """labels: list of (line, text) making up one runs-on selection."""
@@ -275,7 +279,9 @@ jobs:
                                       and not has_self_hosted_constraint
                                   ):
                                       offenders.append((path, line, "unsupported runner expression"))
-                          if isinstance(value, yaml.MappingNode) and not label_nodes:
+                          if isinstance(value, yaml.MappingNode) and not any(
+                              text.strip() for label_node in label_nodes for _, text in leaves(label_node)
+                          ):
                               # A group with no labels selects any runner in the group, which can be a
                               # GitHub-hosted larger-runner group. Only allow-listed groups pass.
                               groups = [t.strip() for g in direct_value(value, "group") for _, t in leaves(g)]
@@ -285,9 +291,7 @@ jobs:
                       for uses in direct_value(job, "uses"):
                           # A reusable workflow outside this repository has runs-on we cannot see.
                           target = uses.value.strip() if isinstance(uses, yaml.ScalarNode) else ""
-                          if not target.startswith("./") and not any(
-                              target.startswith(prefix) for prefix in ALLOWED_REUSABLE_WORKFLOW_PREFIXES
-                          ):
+                          if not target.startswith("./") and not ALLOWED_REUSABLE_WORKFLOW.fullmatch(target):
                               offenders.append((path, uses.start_mark.line + 1, "external reusable workflow " + target))
 
           for path in files:
