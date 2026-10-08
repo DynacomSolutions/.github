@@ -96,6 +96,26 @@ class NoHostedRunnersScannerTest(unittest.TestCase):
                 result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_conditional_bypass_forms_fail(self):
+        for runs_on in (
+            "${{ inputs.r || github.event_name == 'push' && 'k3s-runners' || 'k3s-runners' }}",
+            "${{ github.event_name == 'push' || inputs.r && 'k3s-runners' || 'k3s-runners' }}",
+            "${{ github.event.inputs.r || x && 'k3s-runners' || 'k3s-runners' }}",
+            "${{ vars.r || x && 'k3s-runners' || 'k3s-runners' }}",
+            "${{ env.r || x && 'k3s-runners' || 'k3s-runners' }}",
+            "${{ matrix.r || x && 'k3s-runners' || 'k3s-runners' }}",
+            "${{ inputs.r && 'k3s-runners' || 'k3s-runners' }}",
+            "${{ (a || b && 'k3s-runners' || 'k3s-runners' }}",
+        ):
+            with self.subTest(runs_on=runs_on):
+                result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_conditional_allows_or_only_inside_one_parenthesised_group(self):
+        runs_on = "${{ (a == 'x' || b == 'y') && 'k3s-runners-main' || 'k3s-runners' }}"
+        result = self.run_scanner(f"jobs:\n  build:\n    runs-on: {runs_on}\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_unresolved_dynamic_expression_fails_closed(self):
         result = self.run_scanner("jobs:\n  build:\n    runs-on: ${{ inputs.runner }}\n")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
