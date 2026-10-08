@@ -117,8 +117,54 @@ jobs:
 
           TERNARY = _Ternary
 
+          # GitHub expression delimiters, built piecewise so that this run script never holds a
+          # literal opener (GitHub evaluates openers inside run scripts, even in comments).
+          OPEN = "$" + "{" + "{"
+          CLOSE = "}" + "}"
+
+          def expressions_in(text):
+              """Return (expressions, ok). Each expression is the full opener..closer text.
+
+              The closer is only recognised outside single-quoted strings ('' is an escaped quote), so
+              braces inside strings or nested in the expression cannot end it early. An opener with no
+              closer makes ok False; callers must treat that as an offender (fail closed).
+              """
+              found = []
+              pos = 0
+              while True:
+                  start = text.find(OPEN, pos)
+                  if start < 0:
+                      return found, True
+                  i = start + len(OPEN)
+                  in_string = False
+                  while i < len(text):
+                      ch = text[i]
+                      if in_string:
+                          if ch == "'":
+                              if text[i + 1:i + 2] == "'":
+                                  i += 1
+                              else:
+                                  in_string = False
+                      elif ch == "'":
+                          in_string = True
+                      elif text.startswith(CLOSE, i):
+                          break
+                      i += 1
+                  else:
+                      return found, False
+                  found.append(text[start:i + len(CLOSE)])
+                  pos = i + len(CLOSE)
+
           # Self-hosted runner groups whose names merely look like hosted labels.
           SELF_HOSTED_GROUPS = {"windows-builders"}
+
+          # Reusable workflows from outside the scanned repository are rejected unless allow-listed.
+          # The organisation's .github repository is public and this guard does not scan it (the
+          # guard only runs on private repositories), so trust is limited to workflows on its main
+          # branch, which is changed by reviewed pull requests. SHAs and other refs are rejected.
+          ALLOWED_REUSABLE_WORKFLOW = re.compile(
+              r"DynacomSolutions/\.github/\.github/workflows/[\w.-]+\.ya?ml@main"
+          )
 
           def check(path, labels):
               """labels: list of (line, text) making up one runs-on selection."""
@@ -182,8 +228,12 @@ jobs:
                           # Resolve only this job's matrix. Include entries can
                           # add runner values even when the base dimension is safe.
                           expressions = []
-                          for _, text in labels:
-                              expressions.extend(re.findall(r"\$\{\{[^}]*\}\}", text))
+                          for line, text in labels:
+                              found, ok = expressions_in(text)
+                              if not ok or (found and text.strip() != found[0]) or len(found) > 1:
+                                  # unterminated, embedded in other text, or several in one value
+                                  offenders.append((path, line, "unsupported runner expression"))
+                              expressions.extend(found)
                           matrix_refs = []
                           for expression in expressions:
                               match = re.fullmatch(r"\$\{\{\s*matrix\.([\w-]+)\s*\}\}", expression)
@@ -195,31 +245,54 @@ jobs:
                                   offenders.append((path, labels[0][0], "unsupported runner expression"))
                           for key in matrix_refs:
                               found = False
+                              unresolved = False
                               for strategy in direct_value(job, "strategy"):
                                   for matrix in direct_value(strategy, "matrix"):
+                                      if not isinstance(matrix, yaml.MappingNode):
+                                          unresolved = True  # whole matrix is an expression
+                                          continue
                                       for matrix_value in direct_value(matrix, key):
                                           labels.extend(leaves(matrix_value))
                                           found = True
                                       for include in direct_value(matrix, "include"):
                                           if isinstance(include, yaml.SequenceNode):
                                               include_items = include.value
-                                          else:
+                                          elif isinstance(include, yaml.MappingNode):
                                               include_items = [include]
+                                          else:
+                                              unresolved = True  # include is an expression
+                                              continue
                                           for include_item in include_items:
+                                              if not isinstance(include_item, yaml.MappingNode):
+                                                  unresolved = True  # expression or scalar item
+                                                  continue
                                               for matrix_value in direct_value(include_item, key):
                                                   labels.extend(leaves(matrix_value))
                                                   found = True
-                              if not found and not has_self_hosted_constraint:
+                              if (not found or unresolved) and not has_self_hosted_constraint:
                                   offenders.append((path, labels[0][0], "unresolved matrix expression"))
                           for line, text in labels:
-                              for expression in re.findall(r"\$\{\{[^}]*\}\}", text):
+                              for expression in expressions_in(text)[0]:
                                   if (
                                       not re.fullmatch(r"\$\{\{\s*matrix\.[\w-]+\s*\}\}", expression)
                                       and not TERNARY.fullmatch(expression)
                                       and not has_self_hosted_constraint
                                   ):
                                       offenders.append((path, line, "unsupported runner expression"))
+                          if isinstance(value, yaml.MappingNode) and not any(
+                              text.strip() for label_node in label_nodes for _, text in leaves(label_node)
+                          ):
+                              # A group with no labels selects any runner in the group, which can be a
+                              # GitHub-hosted larger-runner group. Only allow-listed groups pass.
+                              groups = [t.strip() for g in direct_value(value, "group") for _, t in leaves(g)]
+                              if not groups or any(g not in SELF_HOSTED_GROUPS for g in groups):
+                                  offenders.append((path, labels[0][0] if labels else 1, "runner group without labels"))
                           check(path, labels)
+                      for uses in direct_value(job, "uses"):
+                          # A reusable workflow outside this repository has runs-on we cannot see.
+                          target = uses.value.strip() if isinstance(uses, yaml.ScalarNode) else ""
+                          if not target.startswith("./") and not ALLOWED_REUSABLE_WORKFLOW.fullmatch(target):
+                              offenders.append((path, uses.start_mark.line + 1, "external reusable workflow " + target))
 
           for path in files:
               try:
