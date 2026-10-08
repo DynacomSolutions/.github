@@ -89,6 +89,34 @@ jobs:
           HOSTED = re.compile(r"(?<![\w.-])(ubuntu|macos|windows)-[\w.-]+", re.I)
           offenders = []  # (file, line, label)
 
+          # `${{ <condition> && 'label-a' || 'label-b' }}`: the condition only picks between two
+          # literal labels, so it is accepted when both literals pass the hosted-label check
+          # (the HOSTED scan below covers the whole expression text, including the literals).
+          TERNARY_SHAPE = re.compile(r"\$\{\{(?P<cond>[^{}]*?)&&\s*'[\w.-]+'\s*\|\|\s*'[\w.-]+'\s*\}\}")
+          UNTRUSTED_REF = re.compile(r"\b(inputs|vars|env|matrix|secrets)\.|github\.event\.inputs")
+
+          class _Ternary:
+              @staticmethod
+              def fullmatch(expression):
+                  m = TERNARY_SHAPE.fullmatch(expression)
+                  if not m:
+                      return None
+                  if UNTRUSTED_REF.search(expression):
+                      return None
+                  # Drop quoted strings, then balanced parenthesised groups; a `||` left at the
+                  # top level of the condition would make the result fall through to an
+                  # arbitrary right-hand value (a || b && 'x' || 'y' is a || (b && 'x') || 'y').
+                  cond = re.sub(r"'(?:[^']|'')*'", "''", m.group("cond"))
+                  previous = None
+                  while previous != cond:
+                      previous = cond
+                      cond = re.sub(r"\([^()]*\)", "", cond)
+                  if "(" in cond or ")" in cond or "||" in cond:
+                      return None
+                  return m
+
+          TERNARY = _Ternary
+
           # Self-hosted runner groups whose names merely look like hosted labels.
           SELF_HOSTED_GROUPS = {"windows-builders"}
 
@@ -161,6 +189,8 @@ jobs:
                               match = re.fullmatch(r"\$\{\{\s*matrix\.([\w-]+)\s*\}\}", expression)
                               if match:
                                   matrix_refs.append(match.group(1))
+                              elif TERNARY.fullmatch(expression):
+                                  pass  # both literal branches are label-checked below
                               else:
                                   offenders.append((path, labels[0][0], "unsupported runner expression"))
                           for key in matrix_refs:
@@ -185,6 +215,7 @@ jobs:
                               for expression in re.findall(r"\$\{\{[^}]*\}\}", text):
                                   if (
                                       not re.fullmatch(r"\$\{\{\s*matrix\.[\w-]+\s*\}\}", expression)
+                                      and not TERNARY.fullmatch(expression)
                                       and not has_self_hosted_constraint
                                   ):
                                       offenders.append((path, line, "unsupported runner expression"))
