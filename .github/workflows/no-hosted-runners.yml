@@ -25,6 +25,14 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          # Only the files the scan reads: a full checkout of a large repository over a
+          # congested CI uplink can exceed the 2-minute step limit.
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/
+            /action.yml
+            /action.yaml
 
       - name: Provision pinned YAML parser
         timeout-minutes: 3
